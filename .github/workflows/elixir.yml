@@ -1,0 +1,197 @@
+# Reusable Elixir checks.
+#   quality: mix format --check-formatted, compile --warnings-as-errors,
+#            credo, sobelow (security), hex.audit
+#   test:    mix test, with optional service containers
+# The project must depend on :credo and (when `sobelow` is true) :sobelow in
+# the :dev/:test environments.
+name: elixir
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory that contains mix.exs."
+        required: false
+        type: string
+        default: "."
+      elixir-version:
+        description: "Elixir version for erlef/setup-beam."
+        required: false
+        type: string
+        default: "1.20"
+      otp-version:
+        description: "Erlang/OTP version for erlef/setup-beam."
+        required: false
+        type: string
+        default: "29"
+      credo-args:
+        description: "Arguments passed to `mix credo`."
+        required: false
+        type: string
+        default: "--strict"
+      sobelow:
+        description: "Run the Sobelow security scanner (Phoenix projects)."
+        required: false
+        type: boolean
+        default: true
+      sobelow-args:
+        description: "Arguments passed to `mix sobelow`."
+        required: false
+        type: string
+        default: "--exit medium"
+      test-args:
+        description: "Arguments passed to `mix test`."
+        required: false
+        type: string
+        default: ""
+      system-packages:
+        description: "Space separated apt packages to install first."
+        required: false
+        type: string
+        default: ""
+      services:
+        description: "JSON object of service containers for the test job (same shape as `jobs.<id>.services`)."
+        required: false
+        type: string
+        default: "{}"
+      env:
+        description: "JSON object of extra environment variables for every job (e.g. service URLs for tests)."
+        required: false
+        type: string
+        default: "{}"
+      image-name:
+        description: "Optional name shown in job titles (keeps the call signature uniform with docker.yml)."
+        required: false
+        type: string
+        default: ""
+      description:
+        description: "Optional description written to the job summary."
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      private-deps-token:
+        description: "Optional token with read access to private discordy-voics repos (git dependencies)."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: ${{ inputs.image-name || 'elixir' }} / quality
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    env:
+      MIX_ENV: test
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare environment
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
+          EXTRA_ENV: ${{ inputs.env }}
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYSTEM_PACKAGES" ]]; then
+            sudo apt-get update -qq
+            read -ra packages <<< "$SYSTEM_PACKAGES"
+            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+          fi
+          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
+          if [[ -n "$DEPS_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          fi
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ inputs.elixir-version }}
+          otp-version: ${{ inputs.otp-version }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ inputs.working-directory }}/deps
+            ${{ inputs.working-directory }}/_build
+          key: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-${{ hashFiles(format('{0}/mix.lock', inputs.working-directory)) }}
+          restore-keys: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - name: mix credo
+        env:
+          CREDO_ARGS: ${{ inputs.credo-args }}
+        run: |
+          read -ra args <<< "$CREDO_ARGS"
+          mix credo "${args[@]}"
+      - name: mix sobelow
+        if: inputs.sobelow
+        env:
+          SOBELOW_ARGS: ${{ inputs.sobelow-args }}
+        run: |
+          read -ra args <<< "$SOBELOW_ARGS"
+          mix sobelow "${args[@]}"
+      - run: mix hex.audit
+
+  test:
+    name: ${{ inputs.image-name || 'elixir' }} / test
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    services: ${{ fromJSON(inputs.services) }}
+    env:
+      MIX_ENV: test
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare environment
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
+          EXTRA_ENV: ${{ inputs.env }}
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYSTEM_PACKAGES" ]]; then
+            sudo apt-get update -qq
+            read -ra packages <<< "$SYSTEM_PACKAGES"
+            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+          fi
+          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
+          if [[ -n "$DEPS_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          fi
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ inputs.elixir-version }}
+          otp-version: ${{ inputs.otp-version }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ inputs.working-directory }}/deps
+            ${{ inputs.working-directory }}/_build
+          key: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-${{ hashFiles(format('{0}/mix.lock', inputs.working-directory)) }}
+          restore-keys: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-
+      - run: mix deps.get
+      - name: mix test
+        env:
+          TEST_ARGS: ${{ inputs.test-args }}
+        run: |
+          read -ra args <<< "$TEST_ARGS"
+          mix test "${args[@]}"
+      - name: Summary
+        if: inputs.description != ''
+        env:
+          TITLE: ${{ inputs.image-name || github.repository }}
+          DESCRIPTION: ${{ inputs.description }}
+        run: printf '### %s\n\n%s\n' "$TITLE" "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
