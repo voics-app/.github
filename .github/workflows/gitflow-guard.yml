@@ -1,0 +1,82 @@
+# Reusable git-flow guard. GitHub Free has no rulesets for private repos, so
+# the branch model is enforced by this required check instead:
+#   PR -> main     must come from release/*, hotfix/* (or the release-please PR branch)
+#   PR -> develop  must come from feature/*, release/*, hotfix/* or dependabot/*
+# PRs into any other branch pass. Call it from `on: pull_request`.
+name: gitflow-guard
+
+on:
+  workflow_call:
+    inputs:
+      main-branch:
+        description: "Production branch."
+        required: false
+        type: string
+        default: "main"
+      develop-branch:
+        description: "Integration branch."
+        required: false
+        type: string
+        default: "develop"
+      main-sources:
+        description: "Space separated glob patterns of branches allowed to open PRs into the main branch."
+        required: false
+        type: string
+        default: "release/* hotfix/* release-please--*"
+      develop-sources:
+        description: "Space separated glob patterns of branches allowed to open PRs into the develop branch."
+        required: false
+        type: string
+        default: "feature/* release/* hotfix/* dependabot/*"
+      runs-on:
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        required: false
+        type: string
+        default: "ubuntu-latest"
+
+permissions:
+  contents: read
+
+jobs:
+  gitflow:
+    name: gitflow-guard
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    steps:
+      - name: Check source and target branches
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          MAIN_BRANCH: ${{ inputs.main-branch }}
+          DEVELOP_BRANCH: ${{ inputs.develop-branch }}
+          MAIN_SOURCES: ${{ inputs.main-sources }}
+          DEVELOP_SOURCES: ${{ inputs.develop-sources }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" != pull_request* ]]; then
+            echo "::notice::gitflow-guard only checks pull requests (event: $EVENT_NAME)"
+            exit 0
+          fi
+
+          case "$BASE_REF" in
+            "$MAIN_BRANCH") allowed="$MAIN_SOURCES" ;;
+            "$DEVELOP_BRANCH") allowed="$DEVELOP_SOURCES" ;;
+            *)
+              echo "PR into '$BASE_REF' is not governed by git-flow rules"
+              exit 0
+              ;;
+          esac
+
+          read -ra patterns <<< "$allowed"
+          for pattern in "${patterns[@]}"; do
+            # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
+            if [[ "$HEAD_REF" == $pattern ]]; then
+              echo "OK: '$HEAD_REF' -> '$BASE_REF' matches '$pattern'"
+              exit 0
+            fi
+          done
+
+          echo "::error title=git-flow violation::'$HEAD_REF' may not be merged into '$BASE_REF'. Allowed sources: $allowed"
+          exit 1
