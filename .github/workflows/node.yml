@@ -1,0 +1,174 @@
+# Reusable Node checks: pnpm install (frozen lockfile), lint, typecheck, test
+# and pnpm audit. Set a script input to "" to skip that step.
+# GitHub Packages (npm.pkg.github.com) is configured for the `npm-scope`
+# scope, so private @discordy-voics packages such as the contracts package
+# resolve with the job token or `private-deps-token`.
+name: node
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory that contains package.json and pnpm-lock.yaml."
+        required: false
+        type: string
+        default: "."
+      node-version:
+        description: "Node.js version."
+        required: false
+        type: string
+        default: "24"
+      pnpm-version:
+        description: "pnpm version, used only when package.json has no `packageManager` field."
+        required: false
+        type: string
+        default: "10"
+      npm-scope:
+        description: "npm scope served from GitHub Packages."
+        required: false
+        type: string
+        default: "@discordy-voics"
+      lint-script:
+        description: "package.json script for linting (empty to skip)."
+        required: false
+        type: string
+        default: "lint"
+      typecheck-script:
+        description: "package.json script for type checking (empty to skip)."
+        required: false
+        type: string
+        default: "typecheck"
+      test-script:
+        description: "package.json script for tests (empty to skip)."
+        required: false
+        type: string
+        default: "test"
+      audit:
+        description: "Run `pnpm audit` on production dependencies."
+        required: false
+        type: boolean
+        default: true
+      audit-level:
+        description: "Minimum advisory severity that fails `pnpm audit` (low, moderate, high, critical)."
+        required: false
+        type: string
+        default: "critical"
+      system-packages:
+        description: "Space separated apt packages to install first (e.g. `xvfb` for Electron tests)."
+        required: false
+        type: string
+        default: ""
+      services:
+        description: "JSON object of service containers (same shape as `jobs.<id>.services`)."
+        required: false
+        type: string
+        default: "{}"
+      env:
+        description: "JSON object of extra environment variables."
+        required: false
+        type: string
+        default: "{}"
+      image-name:
+        description: "Optional name shown in job titles (keeps the call signature uniform with docker.yml)."
+        required: false
+        type: string
+        default: ""
+      description:
+        description: "Optional description written to the job summary."
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      private-deps-token:
+        description: "Optional token with read access to private discordy-voics repos and packages. Defaults to the job token."
+        required: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  checks:
+    name: ${{ inputs.image-name || 'node' }} / checks
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    services: ${{ fromJSON(inputs.services) }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.private-deps-token || github.token }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare environment
+        id: prepare
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
+          EXTRA_ENV: ${{ inputs.env }}
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+          PNPM_VERSION: ${{ inputs.pnpm-version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYSTEM_PACKAGES" ]]; then
+            sudo apt-get update -qq
+            read -ra packages <<< "$SYSTEM_PACKAGES"
+            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+          fi
+          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
+          if [[ -n "$DEPS_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          fi
+          # pnpm/action-setup refuses an explicit version when package.json pins packageManager.
+          if [[ -n "$(jq -r '.packageManager // empty' package.json)" ]]; then
+            echo "pnpm-version=" >> "$GITHUB_OUTPUT"
+          else
+            echo "pnpm-version=${PNPM_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ steps.prepare.outputs.pnpm-version }}
+          package_json_file: ${{ inputs.working-directory }}/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+          cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+          scope: ${{ inputs.npm-scope }}
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        if: inputs.lint-script != ''
+        env:
+          SCRIPT: ${{ inputs.lint-script }}
+        run: pnpm run "$SCRIPT"
+      - name: Typecheck
+        if: inputs.typecheck-script != ''
+        env:
+          SCRIPT: ${{ inputs.typecheck-script }}
+        run: pnpm run "$SCRIPT"
+      - name: Test
+        if: inputs.test-script != ''
+        env:
+          SCRIPT: ${{ inputs.test-script }}
+        run: pnpm run "$SCRIPT"
+      - name: Audit
+        if: inputs.audit
+        env:
+          AUDIT_LEVEL: ${{ inputs.audit-level }}
+        run: pnpm audit --prod --audit-level "$AUDIT_LEVEL"
+      - name: Summary
+        if: inputs.description != ''
+        env:
+          TITLE: ${{ inputs.image-name || github.repository }}
+          DESCRIPTION: ${{ inputs.description }}
+        run: printf '### %s\n\n%s\n' "$TITLE" "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"

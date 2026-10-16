@@ -1,0 +1,209 @@
+# Reusable Rust checks: rustfmt, clippy (warnings are errors), cargo test and
+# cargo-audit. Jobs run in parallel.
+name: rust
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory that contains Cargo.toml (workspace root)."
+        required: false
+        type: string
+        default: "."
+      toolchain:
+        description: "Rust toolchain to install."
+        required: false
+        type: string
+        default: "1.99"
+      clippy-args:
+        description: "Arguments passed to `cargo clippy`."
+        required: false
+        type: string
+        default: "--all-targets --all-features -- -D warnings"
+      test-args:
+        description: "Arguments passed to `cargo test`."
+        required: false
+        type: string
+        default: "--all-features"
+      audit:
+        description: "Run cargo-audit against the RustSec advisory database."
+        required: false
+        type: boolean
+        default: true
+      audit-args:
+        description: "Extra arguments for `cargo audit`, e.g. `--ignore RUSTSEC-YYYY-NNNN`."
+        required: false
+        type: string
+        default: ""
+      system-packages:
+        description: "Space separated apt packages to install first (e.g. `cmake protobuf-compiler`)."
+        required: false
+        type: string
+        default: ""
+      services:
+        description: "JSON object of service containers for the test job (same shape as `jobs.<id>.services`)."
+        required: false
+        type: string
+        default: "{}"
+      env:
+        description: "JSON object of extra environment variables for every job."
+        required: false
+        type: string
+        default: "{}"
+      image-name:
+        description: "Optional name shown in job titles (keeps the call signature uniform with docker.yml)."
+        required: false
+        type: string
+        default: ""
+      description:
+        description: "Optional description written to the job summary."
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      private-deps-token:
+        description: "Optional token with read access to private discordy-voics repos (git dependencies such as the contracts crate)."
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    name: ${{ inputs.image-name || 'rust' }} / fmt
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ inputs.toolchain }}
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: ${{ inputs.image-name || 'rust' }} / clippy
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare environment
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
+          EXTRA_ENV: ${{ inputs.env }}
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYSTEM_PACKAGES" ]]; then
+            sudo apt-get update -qq
+            read -ra packages <<< "$SYSTEM_PACKAGES"
+            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+          fi
+          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
+          if [[ -n "$DEPS_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+          fi
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ inputs.toolchain }}
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+          shared-key: clippy
+      - name: cargo clippy
+        env:
+          CLIPPY_ARGS: ${{ inputs.clippy-args }}
+        run: |
+          read -ra args <<< "$CLIPPY_ARGS"
+          cargo clippy "${args[@]}"
+
+  test:
+    name: ${{ inputs.image-name || 'rust' }} / test
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    services: ${{ fromJSON(inputs.services) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare environment
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
+          EXTRA_ENV: ${{ inputs.env }}
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYSTEM_PACKAGES" ]]; then
+            sudo apt-get update -qq
+            read -ra packages <<< "$SYSTEM_PACKAGES"
+            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+          fi
+          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
+          if [[ -n "$DEPS_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+          fi
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ inputs.toolchain }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+          shared-key: test
+      - name: cargo test
+        env:
+          TEST_ARGS: ${{ inputs.test-args }}
+        run: |
+          read -ra args <<< "$TEST_ARGS"
+          cargo test "${args[@]}"
+      - name: Summary
+        if: inputs.description != ''
+        env:
+          TITLE: ${{ inputs.image-name || github.repository }}
+          DESCRIPTION: ${{ inputs.description }}
+        run: printf '### %s\n\n%s\n' "$TITLE" "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
+
+  audit:
+    name: ${{ inputs.image-name || 'rust' }} / audit
+    if: inputs.audit
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        env:
+          AUDIT_ARGS: ${{ inputs.audit-args }}
+        run: |
+          [[ -f Cargo.lock ]] || cargo generate-lockfile
+          read -ra args <<< "$AUDIT_ARGS"
+          cargo audit "${args[@]}"
