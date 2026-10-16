@@ -1,0 +1,100 @@
+# Reusable GHCR retention. For every listed container package it keeps
+#   - every stable version (tag X.Y.Z / vX.Y.Z) and anything tagged `latest`
+#   - the newest `keep-prereleases` prerelease versions (X.Y.Z-dev.N, X.Y.Z-rc.N, ...)
+# and deletes the older prerelease versions together with their cosign
+# signature/attestation tags (sha256-<digest>*). Untagged versions are left
+# alone because they can be platform manifests of a multi-arch image.
+# Schedule it from one repo (e.g. weekly) with a token that can delete packages.
+name: ghcr-retention
+
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: "Container package names separated by spaces, commas or newlines, e.g. `api gateway voice-sfu`."
+        required: true
+        type: string
+      owner:
+        description: "Organization that owns the packages (defaults to the repository owner)."
+        required: false
+        type: string
+        default: ""
+      keep-prereleases:
+        description: "Number of newest prerelease versions to keep per package."
+        required: false
+        type: number
+        default: 5
+      dry-run:
+        description: "Only report what would be deleted."
+        required: false
+        type: boolean
+        default: false
+      runs-on:
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      token:
+        description: "Token with read:packages and delete:packages. Defaults to the job token, which works when the calling repo has admin access to the packages."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  retention:
+    name: ghcr-retention
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    permissions:
+      packages: write
+    steps:
+      - name: Prune prerelease versions
+        id: prune
+        env:
+          GH_TOKEN: ${{ secrets.token || github.token }}
+          OWNER: ${{ inputs.owner || github.repository_owner }}
+          PACKAGES: ${{ inputs.packages }}
+          KEEP: ${{ inputs.keep-prereleases }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+
+          # Selects the version ids to delete from a JSON array of package versions.
+          read -r -d '' SELECT <<'JQ' || true
+          def stable: test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$");
+          def prerelease: test("^v?[0-9]+\\.[0-9]+\\.[0-9]+-");
+          def tags: (.metadata.container.tags // []);
+          (sort_by(.created_at) | reverse) as $all
+          | [ $all[]
+              | select(any(tags[]; prerelease))
+              | select(any(tags[]; stable or . == "latest") | not) ] as $prereleases
+          | ($prereleases[$keep:]) as $expired
+          | [ $expired[].name | sub("^sha256:"; "sha256-") ] as $prefixes
+          | [ $all[]
+              | select(any(tags[]; stable or . == "latest") | not)
+              | select(any(tags[]; . as $t | any($prefixes[]; . as $p | $t | startswith($p)))) ] as $artifacts
+          | ($expired + $artifacts) | unique_by(.id)[]
+          | "\(.id)\t\(tags | join(","))"
+          JQ
+
+          deleted=0
+          read -ra names <<< "${PACKAGES//[,$'\n']/ }"
+          for pkg in "${names[@]}"; do
+            echo "::group::${OWNER}/${pkg}"
+            versions="$(gh api --paginate "/orgs/${OWNER}/packages/container/${pkg}/versions?per_page=100" | jq -s 'add // []')"
+            while IFS=$'\t' read -r id tags; do
+              [[ -z "$id" ]] && continue
+              if [[ "$DRY_RUN" == "true" ]]; then
+                echo "would delete ${pkg} version ${id} (${tags})"
+              else
+                gh api -X DELETE "/orgs/${OWNER}/packages/container/${pkg}/versions/${id}" > /dev/null
+                echo "deleted ${pkg} version ${id} (${tags})"
+              fi
+              deleted=$((deleted + 1))
+            done < <(jq -r --argjson keep "$KEEP" "$SELECT" <<< "$versions")
+            echo "::endgroup::"
+          done
+
+          echo "deleted=${deleted}" >> "$GITHUB_OUTPUT"
+          echo "### GHCR retention: ${deleted} version(s) $([[ "$DRY_RUN" == "true" ]] && echo "would be " || true)deleted" >> "$GITHUB_STEP_SUMMARY"
