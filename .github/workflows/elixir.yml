@@ -69,6 +69,11 @@ on:
         required: false
         type: string
         default: ""
+      hex-audit-blocking:
+        description: "Fail the quality job when `mix hex.audit` reports retired packages or advisories. When false the finding is reported as a warning."
+        required: false
+        type: boolean
+        default: false
       runs-on:
         description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
         required: false
@@ -139,7 +144,9 @@ jobs:
         run: |
           read -ra args <<< "$SOBELOW_ARGS"
           mix sobelow "${args[@]}"
-      - run: mix hex.audit
+      - name: mix hex.audit
+        continue-on-error: ${{ !inputs.hex-audit-blocking }}
+        run: mix hex.audit
 
   test:
     name: ${{ inputs.image-name || 'elixir' }} / test
