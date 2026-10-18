@@ -1,0 +1,66 @@
+# Dependabot template for discordy-voics repositories.
+# Copy to <repo>/.github/dependabot.yml and delete the ecosystems the repo does
+# not use. PRs target `develop` (dependabot/* is allowed by gitflow-guard) and
+# use Conventional Commit prefixes so release-please picks them up.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+
+  # Rust services (api, messages, voice/sfu, admin/bff)
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+    groups:
+      cargo-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Elixir services (gateway, voice/signaling)
+  - package-ecosystem: mix
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+    groups:
+      mix-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Node projects (client, admin/web, contracts, bots-sdk); pnpm lockfiles are supported
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+    groups:
+      npm-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]

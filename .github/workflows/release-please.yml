@@ -1,0 +1,70 @@
+# Reusable release-please run (manifest mode). Call it on pushes to `main`:
+# it maintains the release PR and, once that PR is merged, tags vX.Y.Z,
+# updates CHANGELOG.md and creates the GitHub Release.
+#
+# Tags created with the default GITHUB_TOKEN do not trigger other workflows,
+# so either pass a `token` (GitHub App or PAT) or chain docker.yml on the
+# `release-created` output with `version: <version>` (see README).
+name: release-please
+
+on:
+  workflow_call:
+    inputs:
+      target-branch:
+        description: "Branch that release PRs target."
+        required: false
+        type: string
+        default: "main"
+      config-file:
+        description: "release-please config file."
+        required: false
+        type: string
+        default: "release-please-config.json"
+      manifest-file:
+        description: "release-please manifest file."
+        required: false
+        type: string
+        default: ".release-please-manifest.json"
+      runs-on:
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      token:
+        description: "Optional token used instead of GITHUB_TOKEN so that created tags trigger downstream workflows."
+        required: false
+    outputs:
+      release-created:
+        description: "`true` when a release of the root package was created in this run."
+        value: ${{ jobs.release-please.outputs.release-created }}
+      tag-name:
+        description: "Created tag, e.g. v0.1.0."
+        value: ${{ jobs.release-please.outputs.tag-name }}
+      version:
+        description: "Created version, e.g. 0.1.0."
+        value: ${{ jobs.release-please.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release-created: ${{ steps.release.outputs.release_created || 'false' }}
+      tag-name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.token || github.token }}
+          target-branch: ${{ inputs.target-branch }}
+          config-file: ${{ inputs.config-file }}
+          manifest-file: ${{ inputs.manifest-file }}
