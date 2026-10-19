@@ -291,9 +291,10 @@ jobs:
       - name: Generate SBOM (syft)
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          image: ${{ steps.meta.outputs.publish == 'true' && format('{0}@{1}', steps.meta.outputs.image, steps.push.outputs.digest) || format('docker:{0}', steps.meta.outputs.scan-tag) }}
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ steps.meta.outputs.publish == 'true' && format('{0}@{1}', steps.meta.outputs.image, steps.push.outputs.digest) || steps.meta.outputs.scan-tag }}
+          # Credentials make sbom-action pull from the registry; leave them out for the local scan image.
+          registry-username: ${{ steps.meta.outputs.publish == 'true' && github.actor || '' }}
+          registry-password: ${{ steps.meta.outputs.publish == 'true' && secrets.GITHUB_TOKEN || '' }}
           format: spdx-json
           output-file: sbom.spdx.json
           artifact-name: sbom-${{ inputs.image-name }}.spdx.json
