@@ -1,0 +1,105 @@
+# Uploads a build artifact into a MinIO bucket on the gen-serv cluster (the website, the invite page,
+# desktop installers and their update feed).
+#
+# Runs on the in-cluster ARC runner scale set, which reaches MinIO on the cluster network. It logs in to
+# OpenBao with its service account (kubernetes auth role "publish", read-only on kv/discordy/minio,
+# configured by gitops bootstrap/20-openbao.sh), so no MinIO key is stored in GitHub.
+#
+# Objects are mirrored with --overwrite and never removed, so files other repositories publish into
+# the same bucket (for example invite/index.html next to the website) survive. Files matching
+# `short-cache` are given a 5-minute Cache-Control: Cloudflare otherwise caches them for hours and
+# would keep serving the previous release.
+name: minio-publish
+
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: "Name of the artifact (uploaded earlier in the same run) to publish."
+        type: string
+        required: true
+      bucket:
+        description: "Target bucket, e.g. discordy-site or discordy-updates."
+        type: string
+        required: true
+      prefix:
+        description: "Path inside the bucket (no leading or trailing slash). Empty = bucket root."
+        type: string
+        default: ""
+      short-cache:
+        description: "Space-separated file names (relative to the artifact root) served with max-age=300."
+        type: string
+        default: ""
+      copies:
+        description: "Space-separated src:dst pairs copied inside the target after upload, e.g. a stable 'latest' download name."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  BAO_VERSION: 2.4.1
+  BAO_ADDR: http://openbao.voics-system.svc.cluster.local:8200
+  MINIO_URL: http://minio.voics-data.svc.cluster.local:9000
+
+jobs:
+  publish:
+    # ARC scale sets match on their name only.
+    runs-on: discordy
+    concurrency:
+      group: minio-publish-${{ inputs.bucket }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: publish
+
+      - name: Install bao and mc
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C "${RUNNER_TEMP}/bin" bao
+          curl -fsSL -o "${RUNNER_TEMP}/bin/mc" https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod 0755 "${RUNNER_TEMP}/bin/bao" "${RUNNER_TEMP}/bin/mc"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Read the MinIO key from OpenBao
+        run: |
+          token="$(bao write -field=token auth/kubernetes/login role=publish \
+            jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token)"
+          echo "::add-mask::${token}"
+          user="$(BAO_TOKEN="${token}" bao kv get -mount=kv -field=ACCESS_KEY discordy/minio)"
+          pass="$(BAO_TOKEN="${token}" bao kv get -mount=kv -field=SECRET_KEY discordy/minio)"
+          echo "::add-mask::${pass}"
+          BAO_TOKEN="${token}" bao token revoke -self >/dev/null || true
+          mc alias set target "${MINIO_URL}" "${user}" "${pass}" >/dev/null
+
+      - name: Upload
+        env:
+          BUCKET: ${{ inputs.bucket }}
+          PREFIX: ${{ inputs.prefix }}
+          SHORT_CACHE: ${{ inputs.short-cache }}
+          COPIES: ${{ inputs.copies }}
+        run: |
+          set -euo pipefail
+          dest="target/${BUCKET}${PREFIX:+/${PREFIX}}"
+          mc mirror --overwrite publish "${dest}"
+          for f in ${SHORT_CACHE}; do
+            mc cp --attr "Cache-Control=public, max-age=300" "publish/${f}" "${dest}/${f}"
+          done
+          for pair in ${COPIES}; do
+            src="${pair%%:*}" dst="${pair#*:}"
+            mc cp --attr "Cache-Control=public, max-age=300" "${dest}/${src}" "${dest}/${dst}"
+          done
+          {
+            echo "### Published to \`${BUCKET}${PREFIX:+/${PREFIX}}\`"
+            echo '```'
+            mc ls --recursive "${dest}" | tail -n 50
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Forget the MinIO alias
+        if: always()
+        run: mc alias remove target >/dev/null 2>&1 || true
