@@ -5,7 +5,7 @@
 # MinIO key from the one Secret its service account may get (voics-data/minio, Role
 # discordy-runner-publish in gitops), so no MinIO key is stored in GitHub.
 #
-# Objects are mirrored with --overwrite and never removed, so files other repositories publish into
+# Objects are synced (overwritten when changed) and never removed, so files other repositories publish into
 # the same bucket (for example invite/index.html next to the website) survive. Files matching
 # `short-cache` are given a 5-minute Cache-Control: Cloudflare otherwise caches them for hours and
 # would keep serving the previous release.
@@ -39,6 +39,7 @@ permissions:
   contents: read
 
 env:
+  S5CMD_VERSION: 2.3.0
   MINIO_URL: http://minio.voics-data.svc.cluster.local:9000
 
 jobs:
@@ -54,11 +55,11 @@ jobs:
           name: ${{ inputs.artifact }}
           path: publish
 
-      - name: Install mc
+      - name: Install s5cmd
+        # MinIO no longer publishes the mc client (dl.min.io returns 410); s5cmd speaks plain S3.
         run: |
           mkdir -p "${RUNNER_TEMP}/bin"
-          curl -fsSL -o "${RUNNER_TEMP}/bin/mc" https://dl.min.io/client/mc/release/linux-amd64/mc
-          chmod 0755 "${RUNNER_TEMP}/bin/mc"
+          curl -fsSL "https://github.com/peak/s5cmd/releases/download/v${S5CMD_VERSION}/s5cmd_${S5CMD_VERSION}_Linux-64bit.tar.gz"             | tar -xz -C "${RUNNER_TEMP}/bin" s5cmd
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Read the MinIO key from the cluster
@@ -68,7 +69,10 @@ jobs:
           user="$(jq -r '.data.MINIO_ROOT_USER' <<<"${secret}" | base64 -d)"
           pass="$(jq -r '.data.MINIO_ROOT_PASSWORD' <<<"${secret}" | base64 -d)"
           echo "::add-mask::${pass}"
-          mc alias set target "${MINIO_URL}" "${user}" "${pass}" >/dev/null
+          {
+            echo "AWS_ACCESS_KEY_ID=${user}"
+            echo "AWS_SECRET_ACCESS_KEY=${pass}"
+          } >> "${GITHUB_ENV}"
 
       - name: Upload
         env:
@@ -76,24 +80,22 @@ jobs:
           PREFIX: ${{ inputs.prefix }}
           SHORT_CACHE: ${{ inputs.short-cache }}
           COPIES: ${{ inputs.copies }}
+          AWS_REGION: us-east-1
         run: |
           set -euo pipefail
-          dest="target/${BUCKET}${PREFIX:+/${PREFIX}}"
-          mc mirror --overwrite publish "${dest}"
+          s3() { s5cmd --endpoint-url "${MINIO_URL}" "$@"; }
+          dest="s3://${BUCKET}${PREFIX:+/${PREFIX}}"
+          s3 sync publish/ "${dest}/"
           for f in ${SHORT_CACHE}; do
-            mc cp --attr "Cache-Control=public, max-age=300" "publish/${f}" "${dest}/${f}"
+            s3 cp --cache-control "public, max-age=300" "publish/${f}" "${dest}/${f}"
           done
           for pair in ${COPIES}; do
             src="${pair%%:*}" dst="${pair#*:}"
-            mc cp --attr "Cache-Control=public, max-age=300" "${dest}/${src}" "${dest}/${dst}"
+            s3 cp --cache-control "public, max-age=300" "${dest}/${src}" "${dest}/${dst}"
           done
           {
             echo "### Published to \`${BUCKET}${PREFIX:+/${PREFIX}}\`"
             echo '```'
-            mc ls --recursive "${dest}" | tail -n 50
+            s3 ls "${dest}/*" | tail -n 50
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Forget the MinIO alias
-        if: always()
-        run: mc alias remove target >/dev/null 2>&1 || true
