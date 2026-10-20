@@ -61,7 +61,7 @@ on:
         type: string
         default: ""
       runs-on:
-        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`. The default (ubuntu-latest) follows the caller repo variable CI_RUNNER when set (scripts/pc-runner.sh).'
         required: false
         type: string
         default: "ubuntu-latest"
@@ -80,7 +80,7 @@ env:
 jobs:
   fmt:
     name: ${{ inputs.image-name || 'rust' }} / fmt
-    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -96,7 +96,7 @@ jobs:
 
   clippy:
     name: ${{ inputs.image-name || 'rust' }} / clippy
-    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -139,7 +139,7 @@ jobs:
 
   test:
     name: ${{ inputs.image-name || 'rust' }} / test
-    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
       run:
@@ -189,7 +189,7 @@ jobs:
   audit:
     name: ${{ inputs.image-name || 'rust' }} / audit
     if: inputs.audit
-    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
