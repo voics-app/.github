@@ -1,0 +1,30 @@
+name: Platform / CI-CD change
+description: Infrastructure, cluster, pipelines, environments, operator tools.
+labels: ["type:infra", "triage"]
+body:
+  - type: textarea
+    id: change
+    attributes:
+      label: Change
+      description: What changes on the platform (cluster, Flux, ingress, DNS/Access, CI/CD, operator tools) and why?
+    validations:
+      required: true
+  - type: textarea
+    id: environments
+    attributes:
+      label: Environments affected
+      description: production (gen-serv), dev, local compose stack, new environments via Terraform/env.sh.
+    validations:
+      required: true
+  - type: checkboxes
+    id: dod
+    attributes:
+      label: Definition of Done
+      description: The issue is only done when every box applies. See docs/CONTRIBUTING.md#definition-of-done.
+      options:
+        - label: Code merged to develop through a reviewed PR, CI green (lint, tests, scan).
+        - label: Tests added/updated; behaviour verified (live/e2e where it touches calls, delivery or deploys).
+        - label: Documentation updated in the docs repo (runbooks, ADRs, specs, service docs) and in the repo README; the ops portal if an operator tool changed.
+        - label: For platform / CI-CD items, the setup is updated too - Terraform (infra/terraform), bootstrap scripts, env.sh stages, cluster-config / env overlays (production and dev), Cloudflare host lists and the secrets inventory - so a new environment gets it automatically.
+        - label: Manifests validated (scripts/validate.sh, terraform validate) and applied by Flux; nothing changed by hand on the cluster that is not also in git.
+        - label: Board card moved to Done with a closing comment that says how it was verified.
