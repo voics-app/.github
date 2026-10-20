@@ -75,7 +75,7 @@ on:
         type: boolean
         default: false
       runs-on:
-        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`.'
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`. The default (ubuntu-latest) follows the caller repo variable CI_RUNNER when set (scripts/pc-runner.sh).'
         required: false
         type: string
         default: "ubuntu-latest"
@@ -90,7 +90,7 @@ permissions:
 jobs:
   quality:
     name: ${{ inputs.image-name || 'elixir' }} / quality
-    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     env:
       MIX_ENV: test
     defaults:
@@ -150,7 +150,7 @@ jobs:
 
   test:
     name: ${{ inputs.image-name || 'elixir' }} / test
-    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     env:
       MIX_ENV: test
