@@ -41,6 +41,14 @@ else
   LABEL="${LABEL:-${PC_RUNNER_LABEL:-karma-pc}}"
 fi
 CONTAINER="discordy-runner-$LABEL"
+# Jobs start sibling containers on the host's Docker (testcontainers) and reach them on mapped ports:
+# on a Linux VM the runner shares the host network, so "localhost" works; on Docker Desktop the
+# containers are reached through host.docker.internal.
+if [[ -n "$HOST" ]]; then
+  NETWORK_ARGS="--network host"
+else
+  NETWORK_ARGS="--add-host host.docker.internal:host-gateway -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal"
+fi
 
 runners_json() { gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[]"; }
 set_runner_var() {
@@ -59,7 +67,7 @@ case "$cmd" in
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
       docker run -d --name "$c" --user root \
         -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" \
-        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v /var/run/docker.sock:/var/run/docker.sock $NETWORK_ARGS \
         "$IMAGE" bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq $PACKAGES >/dev/null && cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
     done
     online=0
