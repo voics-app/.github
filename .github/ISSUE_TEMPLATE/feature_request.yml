@@ -27,3 +27,14 @@ body:
       options:
         - label: This is not payments, DRM capture or full-text search (out of scope).
           required: true
+  - type: checkboxes
+    id: dod
+    attributes:
+      label: Definition of Done
+      description: The issue is only done when every box applies. See docs/CONTRIBUTING.md#definition-of-done.
+      options:
+        - label: Code merged to develop through a reviewed PR, CI green (lint, tests, scan).
+        - label: Tests added/updated; behaviour verified (live/e2e where it touches calls, delivery or deploys).
+        - label: Documentation updated in the docs repo (runbooks, ADRs, specs, service docs) and in the repo README; the ops portal if an operator tool changed.
+        - label: For platform / CI-CD items, the setup is updated too - Terraform (infra/terraform), bootstrap scripts, env.sh stages, cluster-config / env overlays (production and dev), Cloudflare host lists and the secrets inventory - so a new environment gets it automatically.
+        - label: Board card moved to Done with a closing comment that says how it was verified.
