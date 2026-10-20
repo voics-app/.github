@@ -17,6 +17,8 @@ NAME="${PC_RUNNER_NAME:-karma-pc}"
 LABEL="${PC_RUNNER_LABEL:-karma-pc}"
 IMAGE=ghcr.io/actions/actions-runner:2.338.0   # same runner version as the in-cluster ARC scale set
 CONTAINER=discordy-pc-runner
+# The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
+PACKAGES="libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 git curl ca-certificates xz-utils"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
 
 set_var() { for r in "${REPOS[@]}"; do gh variable set CI_RUNNER -R "$ORG/$r" --body "$LABEL" >/dev/null && echo "  CI_RUNNER=$LABEL on $r"; done; }
@@ -27,10 +29,10 @@ case "${1:-status}" in
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
     docker run -d --name "$CONTAINER" --user root \
-      -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$NAME" -e LABEL="$LABEL" \
+      -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$NAME" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      "$IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
-    for _ in $(seq 1 30); do
+      "$IMAGE" bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq $PACKAGES >/dev/null && cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
+    for _ in $(seq 1 90); do
       [[ "$(gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[] | select(.name==\"$NAME\") | .status")" == online ]] && break
       sleep 2
     done
