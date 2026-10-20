@@ -1,9 +1,9 @@
 # Uploads a build artifact into a MinIO bucket on the gen-serv cluster (the website, the invite page,
 # desktop installers and their update feed).
 #
-# Runs on the in-cluster ARC runner scale set, which reaches MinIO on the cluster network. It logs in to
-# OpenBao with its service account (kubernetes auth role "publish", read-only on kv/discordy/minio,
-# configured by gitops bootstrap/20-openbao.sh), so no MinIO key is stored in GitHub.
+# Runs on the in-cluster ARC runner scale set, which reaches MinIO on the cluster network. It reads the
+# MinIO key from the one Secret its service account may get (voics-data/minio, Role
+# discordy-runner-publish in gitops), so no MinIO key is stored in GitHub.
 #
 # Objects are mirrored with --overwrite and never removed, so files other repositories publish into
 # the same bucket (for example invite/index.html next to the website) survive. Files matching
@@ -39,8 +39,6 @@ permissions:
   contents: read
 
 env:
-  BAO_VERSION: 2.4.1
-  BAO_ADDR: http://openbao.voics-system.svc.cluster.local:8200
   MINIO_URL: http://minio.voics-data.svc.cluster.local:9000
 
 jobs:
@@ -56,24 +54,20 @@ jobs:
           name: ${{ inputs.artifact }}
           path: publish
 
-      - name: Install bao and mc
+      - name: Install mc
         run: |
           mkdir -p "${RUNNER_TEMP}/bin"
-          curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERSION}/bao_${BAO_VERSION}_Linux_x86_64.tar.gz" \
-            | tar -xz -C "${RUNNER_TEMP}/bin" bao
           curl -fsSL -o "${RUNNER_TEMP}/bin/mc" https://dl.min.io/client/mc/release/linux-amd64/mc
-          chmod 0755 "${RUNNER_TEMP}/bin/bao" "${RUNNER_TEMP}/bin/mc"
+          chmod 0755 "${RUNNER_TEMP}/bin/mc"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
-      - name: Read the MinIO key from OpenBao
+      - name: Read the MinIO key from the cluster
         run: |
-          token="$(bao write -field=token auth/kubernetes/login role=publish \
-            jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token)"
-          echo "::add-mask::${token}"
-          user="$(BAO_TOKEN="${token}" bao kv get -mount=kv -field=ACCESS_KEY discordy/minio)"
-          pass="$(BAO_TOKEN="${token}" bao kv get -mount=kv -field=SECRET_KEY discordy/minio)"
+          sa=/var/run/secrets/kubernetes.io/serviceaccount
+          secret="$(curl -fsS --cacert "${sa}/ca.crt" -H "Authorization: Bearer $(cat "${sa}/token")"             https://kubernetes.default.svc/api/v1/namespaces/voics-data/secrets/minio)"
+          user="$(jq -r '.data.MINIO_ROOT_USER' <<<"${secret}" | base64 -d)"
+          pass="$(jq -r '.data.MINIO_ROOT_PASSWORD' <<<"${secret}" | base64 -d)"
           echo "::add-mask::${pass}"
-          BAO_TOKEN="${token}" bao token revoke -self >/dev/null || true
           mc alias set target "${MINIO_URL}" "${user}" "${pass}" >/dev/null
 
       - name: Upload
