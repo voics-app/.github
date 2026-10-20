@@ -232,6 +232,28 @@ jobs:
       inventory-token: ${{ secrets.DOCS_READ_TOKEN }}
 ```
 
+## CI runners
+
+All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When the GitHub Free minutes run low, you can switch every repository to self-hosted runners on the owner's PC or on a VM, and back, with a single command. Jobs that name a runner explicitly keep it: `discordy` (the in-cluster ARC runners, used for secrets-sync and minio-publish) and `windows-latest` (the installer build).
+
+| Where jobs run | Switch with | Notes |
+|---|---|---|
+| GitHub-hosted (default) | `scripts/runner.sh use github` | Costs Actions minutes; private repos get 2 vCPU / 7 GB / 14 GB SSD |
+| Owner's PC (label `karma-pc`) | `scripts/runner.sh up` (starts 3 containers and switches) | Docker Desktop; run `scripts/runner.sh down` before shutting the PC off |
+| A VM (label `vm-<host>`) | `scripts/runner-vm-bootstrap.sh user@vm` once, then `scripts/runner.sh up --host user@vm` and `scripts/runner.sh use vm-<host>` | Any Ubuntu/Debian VM reachable over SSH |
+| In-cluster ARC (`discordy`) | named explicitly in a workflow | For jobs that need the cluster network |
+
+How it works:
+
+- **Switching:** the reusable workflows' `runs-on` defaults to `ubuntu-latest`, but follows the caller repository variable `CI_RUNNER` when it is set. `runner.sh use <label>` sets that variable in every repository; `use github` deletes it.
+- **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.0`, one job each. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
+- **Restarts:** the containers have no restart policy, so after a reboot the runners are gone. Run `up` again, or `use github`.
+- **Removing runners:** `runner.sh down [--host ...]` deregisters and removes them, and switches back to GitHub if they were active.
+- **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
+- **Requirements:** `gh` with `admin:org` (registration tokens), Docker, and `jq`. `--host` also needs SSH access.
+
+**Resources per runner (one concurrent job):** 2 vCPU, 6–8 GB RAM, about 40 GB disk. Rust builds (api, messages, sfu, native crypto) are the heaviest; docker image builds and caches need the disk. A VM for 3 runners therefore needs about **6–8 vCPU, 16–24 GB RAM and 150 GB disk** (SSD preferred). An idle runner uses about 100 MB RAM.
+
 ## Local development
 
 Only Docker is needed. Both targets run in containers.
