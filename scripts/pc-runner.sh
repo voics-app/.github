@@ -31,10 +31,10 @@ case "${1:-status}" in
       -v /var/run/docker.sock:/var/run/docker.sock \
       "$IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
     for _ in $(seq 1 30); do
-      [[ "$(gh api "orgs/$ORG/actions/runners" -q ".runners[] | select(.name==\"$NAME\") | .status")" == online ]] && break
+      [[ "$(gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[] | select(.name==\"$NAME\") | .status")" == online ]] && break
       sleep 2
     done
-    echo "runner $NAME: $(gh api "orgs/$ORG/actions/runners" -q ".runners[] | select(.name==\"$NAME\") | .status")"
+    echo "runner $NAME: $(gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[] | select(.name==\"$NAME\") | .status")"
     set_var
     ;;
   down)
@@ -44,13 +44,13 @@ case "${1:-status}" in
       docker exec -e T="$token" "$CONTAINER" bash -c 'cd /home/runner && ./config.sh remove --token "$T"' >/dev/null 2>&1 || true
       docker rm -f "$CONTAINER" >/dev/null
     fi
-    id="$(gh api "orgs/$ORG/actions/runners" -q ".runners[] | select(.name==\"$NAME\") | .id")"
+    id="$(gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[] | select(.name==\"$NAME\") | .id")"
     [[ -n "$id" ]] && gh api -X DELETE "orgs/$ORG/actions/runners/$id" >/dev/null || true
     echo "runner $NAME removed; workflows use GitHub-hosted runners"
     ;;
   status)
     echo "container: $(docker ps --filter "name=^${CONTAINER}$" --format '{{.Status}}' || true)"
-    echo "github:    $(gh api "orgs/$ORG/actions/runners" -q ".runners[] | select(.name==\"$NAME\") | .status + \" busy=\" + (.busy|tostring)" 2>/dev/null || echo unknown)"
+    echo "github:    $(gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[] | select(.name==\"$NAME\") | .status + \" busy=\" + (.busy|tostring)" 2>/dev/null || echo unknown)"
     for r in "${REPOS[@]}"; do v="$(gh variable get CI_RUNNER -R "$ORG/$r" 2>/dev/null || true)"; echo "  $r: CI_RUNNER=${v:-<unset: ubuntu-latest>}"; done
     ;;
   *) echo "usage: $0 up|down|status"; exit 2 ;;
