@@ -243,8 +243,7 @@ jobs:
             echo "annotations<<${delimiter}"
             for scope in index manifest; do
               echo "${scope}:org.opencontainers.image.title=${IMAGE_NAME}"
-              echo "${scope}:org.opencontainers.image.description=${DESCRIPTION//$'
-'/ }"
+              echo "${scope}:org.opencontainers.image.description=${DESCRIPTION//$'\n'/ }"
               echo "${scope}:org.opencontainers.image.source=${SOURCE_URL}"
               echo "${scope}:org.opencontainers.image.version=${version}"
               echo "${scope}:org.opencontainers.image.revision=${SHA}"
