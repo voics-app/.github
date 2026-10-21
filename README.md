@@ -240,7 +240,8 @@ All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When t
 |---|---|---|
 | GitHub-hosted (default) | `scripts/runner.sh use github` | Costs Actions minutes; private repos get 2 vCPU / 7 GB / 14 GB SSD |
 | Owner's PC (label `karma-pc`) | `scripts/runner.sh up` (starts 3 containers and switches) | Docker Desktop; run `scripts/runner.sh down` before shutting the PC off |
-| A VM (label `vm-<host>`) | `scripts/runner-vm-bootstrap.sh user@vm` once, then `scripts/runner.sh up --host user@vm` and `scripts/runner.sh use vm-<host>` | Any Ubuntu/Debian VM reachable over SSH |
+| A VM, set up **on the VM itself** (label `vm-<hostname>`) | clone this repo on the VM, `gh auth login` + `gh auth refresh -s admin:org`, then `scripts/runner-vm-bootstrap.sh` (no sudo, no argument), log out/in, `scripts/runner.sh up` | Easiest; `up` switches CI to the VM |
+| A VM, managed **from the PC** over SSH (label `vm-<ip>`) | `ssh-copy-id user@vm`, `scripts/runner-vm-bootstrap.sh user@vm`, `scripts/runner.sh up --host user@vm`, `scripts/runner.sh use vm-<ip>` | Any Ubuntu/Debian VM reachable over SSH |
 | In-cluster ARC (`discordy`) | named explicitly in a workflow | For jobs that need the cluster network |
 
 How it works:

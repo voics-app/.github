@@ -37,6 +37,9 @@ done
 if [[ -n "$HOST" ]]; then
   export DOCKER_HOST="ssh://$HOST"
   LABEL="${LABEL:-vm-$(echo "${HOST#*@}" | tr '.' '-')}"
+elif [[ "$(uname -s)" == Linux ]]; then
+  # Running directly on a Linux VM: local Docker, label after the machine.
+  LABEL="${LABEL:-vm-$(hostname -s)}"
 else
   LABEL="${LABEL:-${PC_RUNNER_LABEL:-karma-pc}}"
 fi
@@ -44,7 +47,7 @@ CONTAINER="discordy-runner-$LABEL"
 # Jobs start sibling containers on the host's Docker (testcontainers) and reach them on mapped ports:
 # on a Linux VM the runner shares the host network, so "localhost" works; on Docker Desktop the
 # containers are reached through host.docker.internal.
-if [[ -n "$HOST" ]]; then
+if [[ -n "$HOST" || "$(uname -s)" == Linux ]]; then
   NETWORK_ARGS="--network host"
 else
   NETWORK_ARGS="--add-host host.docker.internal:host-gateway -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal"
@@ -77,7 +80,7 @@ case "$cmd" in
       sleep 2
     done
     echo "runners online ($LABEL): $online/$COUNT"
-    [[ -z "$HOST" ]] && set_runner_var "$LABEL"
+    [[ -z "$HOST" ]] && set_runner_var "$LABEL"   # started on this machine (PC or VM): send jobs here
     [[ -n "$HOST" ]] && echo "send jobs here with: scripts/runner.sh use $LABEL"
     ;;
   down)
