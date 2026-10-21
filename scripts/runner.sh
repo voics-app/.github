@@ -63,6 +63,8 @@ else
   NETWORK_ARGS="--add-host host.docker.internal:host-gateway -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal"
 fi
 
+# Works on old gh versions too (gh variable get is recent); empty when the variable is not set.
+get_runner_var() { gh api "repos/$ORG/api/actions/variables/CI_RUNNER" -q .value 2>/dev/null || true; }
 runners_json() { gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[]"; }
 set_runner_var() {
   for r in "${REPOS[@]}"; do
@@ -107,7 +109,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     [[ -n "$HOST" ]] && echo "send jobs here with: scripts/runner.sh use $LABEL"
     ;;
   down)
-    current="$(gh variable get CI_RUNNER -R "$ORG/api" 2>/dev/null || true)"
+    current="$(get_runner_var)"
     others="$(runners_json | jq -s "[.[] | select(.status==\"online\") | select(any(.labels[]; .name==\"$LABEL\")) | select(.name|startswith(\"$PREFIX-\")|not)] | length")"
     if [[ "$current" == "$LABEL" && "$others" -eq 0 ]]; then set_runner_var github
     elif [[ "$current" == "$LABEL" ]]; then echo "$others other runner(s) with label $LABEL still online: CI stays on $LABEL"; fi
@@ -132,7 +134,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     set_runner_var "$TARGET"
     ;;
   status)
-    v="$(gh variable get CI_RUNNER -R "$ORG/api" 2>&1)" || { [[ "$v" == *"not found"* ]] && v='<unset: GitHub-hosted ubuntu-latest>' || v="<could not read: $v>"; }
+    v="$(get_runner_var)"; v="${v:-<unset: GitHub-hosted ubuntu-latest>}"
     echo "CI_RUNNER (api): $v"
     echo "this machine: runners named $PREFIX-N, label $LABEL"
     docker ps --filter "name=^$CONTAINER" --format '{{.Names}}: {{.Status}}' 2>/dev/null || true
