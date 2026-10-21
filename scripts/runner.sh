@@ -105,7 +105,9 @@ case "$cmd" in
     elif [[ "$current" == "$LABEL" ]]; then echo "$others other runner(s) with label $LABEL still online: CI stays on $LABEL"; fi
     for c in $(docker ps -a --format '{{.Names}}' | grep -E "^$CONTAINER(-[0-9]+)?$" || true); do
       token="$(gh api -X POST "orgs/$ORG/actions/runners/remove-token" -q .token)"
-      docker exec -e T="$token" "$c" bash -c 'cd /home/runner && ./config.sh remove --token "$T"' >/dev/null 2>&1 || true
+      echo "  removing $c"
+      # A runner that never finished registering has nothing to remove; don't let that block down.
+      timeout 30 docker exec -e T="$token" "$c" bash -c 'cd /home/runner && [ -f .runner ] && ./config.sh remove --token "$T"' >/dev/null 2>&1 || true
       docker rm -f "$c" >/dev/null
     done
     for id in $(runners_json | jq -r "select(.name|startswith(\"$PREFIX-\")) | .id"); do
