@@ -14,3 +14,8 @@ test:
 	  apt-get update -qq && apt-get install -y -qq --no-install-recommends jq >/dev/null && \
 	  pip install --quiet --root-user-action=ignore "pyyaml>=6,<7" && \
 	  python -m unittest discover -s tests -v'
+
+# Install the pre-push hook (lint + unit tests, see lefthook.yml).
+.PHONY: hooks
+hooks:
+	lefthook install

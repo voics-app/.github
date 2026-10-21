@@ -300,3 +300,7 @@ These steps need the GitHub org, so they could not be done from here:
 ## Notes
 
 The working branch is `feature/github-bootstrap`, not `feature/.github-bootstrap`: git rejects ref components that start with a dot.
+
+## Git hooks
+
+Tests run locally, not in CI. Install [lefthook](https://lefthook.dev/installation/) once and run `make hooks` (or `lefthook install`) to enable the pre-push hook in `lefthook.yml`: it runs this repository's lint and unit tests before every push. CI repeats only the slim gate on pull requests. Skip once with `LEFTHOOK=0 git push`.
