@@ -253,6 +253,8 @@ How it works:
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
 - **Requirements:** `gh` with `admin:org` (registration tokens), Docker, and `jq`. `--host` also needs SSH access.
 
+**Split by default:** `up` and `use <label>` switch only the heavy repos (api, messages, gateway, voice, client) to self-hosted runners; the light repos (docs, website, contracts, gitops, .github, bots-sdk, admin) keep GitHub-hosted runners within the $15/month budget. Change the set with `SELF_HOSTED_REPOS="api messages" scripts/runner.sh up`. `use github` resets all repos.
+
 **Several VMs:** every machine names its runners `<label>-<machine id>-N`, so names never collide, even when two VMs have the same hostname. Give VMs the same `--label` to make one pool: `scripts/runner.sh up --label vm-pool` on each VM, and jobs go to whichever runner is free. `down` removes only that machine's runners, and switches CI back to GitHub only when no other runner with the label is online.
 
 **Resources per runner (one concurrent job):** 2 vCPU, 6–8 GB RAM, about 40 GB disk. Rust builds (api, messages, sfu, native crypto) are the heaviest; docker image builds and caches need the disk. A VM for 3 runners therefore needs about **6–8 vCPU, 16–24 GB RAM and 150 GB disk** (SSD preferred). An idle runner uses about 100 MB RAM.
