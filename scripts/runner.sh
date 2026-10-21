@@ -81,7 +81,8 @@ case "$cmd" in
     printf 'FROM %s
 USER root
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*
-' "$IMAGE" "$PACKAGES"       | docker build --progress=plain -t "$LOCAL_IMAGE" - 2>&1 | grep -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed 's/^/    /'
+' "$IMAGE" "$PACKAGES"       | docker build --progress=plain -t "$LOCAL_IMAGE" - 2>&1 | grep -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed 's/^/    /' || true
+    docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || { echo "building $LOCAL_IMAGE failed"; exit 1; }
     for i in $(seq 1 "$COUNT"); do
       c="$CONTAINER-$i"; n="$PREFIX-$i"
       echo "  [$i/$COUNT] starting container $c"
