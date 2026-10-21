@@ -4,11 +4,15 @@ name: ci
 
 on:
   push:
-    branches: [main, develop, "release/**", "hotfix/**", "feature/**"]
+    branches: [main, develop, "release/**", "hotfix/**"]
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gitflow:

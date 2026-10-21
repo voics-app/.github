@@ -176,8 +176,12 @@ jobs:
       - name: cargo test
         env:
           TEST_ARGS: ${{ inputs.test-args }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           read -ra args <<< "$TEST_ARGS"
+          # Pull requests run the fast unit tests only (the pre-push hook runs them locally too); the
+          # integration tests (testcontainers) run on develop, main, release branches and tags.
+          if [[ "$EVENT_NAME" == pull_request* ]]; then args+=(--lib --bins); fi
           cargo test "${args[@]}"
       - name: Summary
         if: inputs.description != ''
@@ -188,7 +192,8 @@ jobs:
 
   audit:
     name: ${{ inputs.image-name || 'rust' }} / audit
-    if: inputs.audit
+    # Not on pull requests: audited on develop, main, tags and the weekly schedule.
+    if: inputs.audit && github.event_name != 'pull_request'
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:

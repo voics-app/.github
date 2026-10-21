@@ -162,7 +162,7 @@ jobs:
           SCRIPT: ${{ inputs.test-script }}
         run: pnpm run "$SCRIPT"
       - name: Audit
-        if: inputs.audit
+        if: inputs.audit && github.event_name != 'pull_request'
         env:
           AUDIT_LEVEL: ${{ inputs.audit-level }}
         run: pnpm audit --prod --audit-level "$AUDIT_LEVEL"
