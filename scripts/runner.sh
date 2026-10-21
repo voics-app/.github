@@ -44,6 +44,16 @@ else
   LABEL="${LABEL:-${PC_RUNNER_LABEL:-karma-pc}}"
 fi
 CONTAINER="discordy-runner-$LABEL"
+# Runner NAMES must be unique across machines (registration uses --replace, and down removes by name),
+# while several machines may share one LABEL to form a pool. Names get a short id of this machine.
+if [[ -n "$HOST" ]]; then
+  NODE="$(ssh "$HOST" 'cat /etc/machine-id 2>/dev/null || hostname' | tr -dc 'a-z0-9' | cut -c1-6)"
+elif [[ -r /etc/machine-id ]]; then
+  NODE="$(tr -dc 'a-z0-9' </etc/machine-id | cut -c1-6)"
+else
+  NODE="$(hostname | tr 'A-Z' 'a-z' | tr -dc 'a-z0-9' | cut -c1-6)"
+fi
+PREFIX="$LABEL-$NODE"
 # Jobs start sibling containers on the host's Docker (testcontainers) and reach them on mapped ports:
 # on a Linux VM the runner shares the host network, so "localhost" works; on Docker Desktop the
 # containers are reached through host.docker.internal.
@@ -66,7 +76,7 @@ case "$cmd" in
   up)
     echo "Starting $COUNT runner(s) with label $LABEL (first run downloads the image; each runner installs build packages, 2-5 min)"
     for i in $(seq 1 "$COUNT"); do
-      c="$CONTAINER-$i"; n="$LABEL-$i"
+      c="$CONTAINER-$i"; n="$PREFIX-$i"
       echo "  [$i/$COUNT] starting container $c"
       docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
@@ -79,7 +89,7 @@ case "$cmd" in
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
     last=-1
     for _ in $(seq 1 150); do
-      online="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$LABEL-\")) | select(.status==\"online\")] | length")"
+      online="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$PREFIX-\")) | select(.status==\"online\")] | length")"
       [[ "$online" != "$last" ]] && { echo "  online: $online/$COUNT"; last="$online"; }
       [[ "$online" -ge "$COUNT" ]] && break
       sleep 2
@@ -90,13 +100,15 @@ case "$cmd" in
     ;;
   down)
     current="$(gh variable get CI_RUNNER -R "$ORG/api" 2>/dev/null || true)"
-    [[ "$current" == "$LABEL" ]] && set_runner_var github
+    others="$(runners_json | jq -s "[.[] | select(.status==\"online\") | select(any(.labels[]; .name==\"$LABEL\")) | select(.name|startswith(\"$PREFIX-\")|not)] | length")"
+    if [[ "$current" == "$LABEL" && "$others" -eq 0 ]]; then set_runner_var github
+    elif [[ "$current" == "$LABEL" ]]; then echo "$others other runner(s) with label $LABEL still online: CI stays on $LABEL"; fi
     for c in $(docker ps -a --format '{{.Names}}' | grep -E "^$CONTAINER(-[0-9]+)?$" || true); do
       token="$(gh api -X POST "orgs/$ORG/actions/runners/remove-token" -q .token)"
       docker exec -e T="$token" "$c" bash -c 'cd /home/runner && ./config.sh remove --token "$T"' >/dev/null 2>&1 || true
       docker rm -f "$c" >/dev/null
     done
-    for id in $(runners_json | jq -r "select(.name==\"$LABEL\" or (.name|startswith(\"$LABEL-\"))) | .id"); do
+    for id in $(runners_json | jq -r "select(.name|startswith(\"$PREFIX-\")) | .id"); do
       gh api -X DELETE "orgs/$ORG/actions/runners/$id" >/dev/null || true
     done
     echo "runners $LABEL removed"
@@ -110,7 +122,9 @@ case "$cmd" in
     set_runner_var "$TARGET"
     ;;
   status)
-    echo "CI_RUNNER (api): $(gh variable get CI_RUNNER -R "$ORG/api" 2>/dev/null || echo '<unset: GitHub-hosted ubuntu-latest>')"
+    v="$(gh variable get CI_RUNNER -R "$ORG/api" 2>&1)" || { [[ "$v" == *"not found"* ]] && v='<unset: GitHub-hosted ubuntu-latest>' || v="<could not read: $v>"; }
+    echo "CI_RUNNER (api): $v"
+    echo "this machine: runners named $PREFIX-N, label $LABEL"
     docker ps --filter "name=^$CONTAINER" --format '{{.Names}}: {{.Status}}' 2>/dev/null || true
     runners_json | jq -r 'select(.status=="online") | "\(.name) [\([.labels[].name]|join(","))] busy=\(.busy)"'
     ;;
