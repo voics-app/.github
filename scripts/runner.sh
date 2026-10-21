@@ -75,6 +75,13 @@ set_runner_var() {
 case "$cmd" in
   up)
     echo "Starting $COUNT runner(s) with label $LABEL (first run downloads the image; each runner installs build packages, 2-5 min)"
+    # Build packages into a local image once (cached afterwards), instead of apt-get in every container.
+    LOCAL_IMAGE="discordy-actions-runner:${IMAGE##*:}"
+    echo "Building $LOCAL_IMAGE (first time takes a few minutes; cached afterwards)"
+    printf 'FROM %s
+USER root
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*
+' "$IMAGE" "$PACKAGES"       | docker build --progress=plain -t "$LOCAL_IMAGE" - 2>&1 | grep -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed 's/^/    /'
     for i in $(seq 1 "$COUNT"); do
       c="$CONTAINER-$i"; n="$PREFIX-$i"
       echo "  [$i/$COUNT] starting container $c"
@@ -83,7 +90,7 @@ case "$cmd" in
       docker run -d --name "$c" --user root \
         -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" \
         -v /var/run/docker.sock:/var/run/docker.sock $NETWORK_ARGS \
-        "$IMAGE" bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq $PACKAGES >/dev/null && cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
+        "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
     done
     online=0
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
