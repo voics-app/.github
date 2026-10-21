@@ -23,6 +23,9 @@ IMAGE=ghcr.io/actions/actions-runner:2.338.0   # same runner version as the in-c
 # The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
 PACKAGES="libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 git curl ca-certificates xz-utils"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
+# Repos whose CI runs on self-hosted runners when they are up (heavy Rust/Docker builds; free). The rest
+# stay on GitHub-hosted runners (cheap, light jobs; $15/month budget). Override with SELF_HOSTED_REPOS="...".
+read -ra SELF_HOSTED <<< "${SELF_HOSTED_REPOS:-api messages gateway voice client}"
 
 cmd="${1:-status}"; shift || true
 HOST=""; COUNT=3; LABEL=""
@@ -67,11 +70,13 @@ fi
 get_runner_var() { gh api "repos/$ORG/api/actions/variables/CI_RUNNER" -q .value 2>/dev/null || true; }
 runners_json() { gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[]"; }
 set_runner_var() {
-  for r in "${REPOS[@]}"; do
+  local targets=("${REPOS[@]}")
+  [[ "$1" != github ]] && targets=("${SELF_HOSTED[@]}")
+  for r in "${targets[@]}"; do
     if [[ "$1" == github ]]; then gh variable delete CI_RUNNER -R "$ORG/$r" >/dev/null 2>&1 || true
     else gh variable set CI_RUNNER -R "$ORG/$r" --body "$1" >/dev/null; fi
   done
-  echo "CI_RUNNER -> $1 in ${#REPOS[@]} repos"
+  echo "CI_RUNNER -> $1 in ${#targets[@]} repos (${targets[*]})"
 }
 
 case "$cmd" in
