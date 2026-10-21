@@ -142,6 +142,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0   # release tags are needed to derive the pre-release version
 
       - name: Derive version, tags and labels
         id: meta
@@ -165,12 +166,21 @@ jobs:
           stable_re='^([0-9]+)\.([0-9]+)\.([0-9]+)$'
           semver_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
+          # Base version for pre-release tags (-dev.N, -rc.N): the next patch after the latest vX.Y.Z git
+          # tag (releases are cut as git tags), falling back to the release-please manifest.
           manifest_version() {
+            local tag v
+            tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+            if [[ -n "$tag" ]]; then
+              v="${tag#v}"
+              IFS=. read -r major minor patch <<< "$v"
+              printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
+              return
+            fi
             if [[ ! -f "$MANIFEST_PATH" ]]; then
-              echo "::error::release-please manifest '$MANIFEST_PATH' not found; it is needed to derive X.Y.Z" >&2
+              echo "::error::no vX.Y.Z git tag and no release-please manifest '$MANIFEST_PATH'; cannot derive X.Y.Z" >&2
               exit 1
             fi
-            local v
             v="$(jq -r --arg key "$MANIFEST_KEY" '.[$key] // empty' "$MANIFEST_PATH")"
             if [[ ! "$v" =~ $stable_re ]]; then
               echo "::error::'$MANIFEST_PATH' key '$MANIFEST_KEY' holds '$v', expected X.Y.Z" >&2
@@ -227,6 +237,19 @@ jobs:
             echo "org.opencontainers.image.revision=${SHA}"
             echo "org.opencontainers.image.licenses=UNLICENSED"
             echo "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "${delimiter}"
+            # GHCR shows title/description from OCI annotations on the index/manifest, not from config
+            # labels (an attestation or multi-platform build wraps the image in an index).
+            echo "annotations<<${delimiter}"
+            for scope in index manifest; do
+              echo "${scope}:org.opencontainers.image.title=${IMAGE_NAME}"
+              echo "${scope}:org.opencontainers.image.description=${DESCRIPTION//$'
+'/ }"
+              echo "${scope}:org.opencontainers.image.source=${SOURCE_URL}"
+              echo "${scope}:org.opencontainers.image.version=${version}"
+              echo "${scope}:org.opencontainers.image.revision=${SHA}"
+              echo "${scope}:org.opencontainers.image.licenses=UNLICENSED"
+            done
             echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
 
@@ -292,6 +315,7 @@ jobs:
           secrets: ${{ secrets.build-secrets }}
           platforms: ${{ inputs.platforms }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           tags: ${{ steps.meta.outputs.tags }}
           push: true
           cache-from: ${{ env.SELF_HOSTED != 'true' && format('type=gha,scope={0}', inputs.image-name) || '' }}
