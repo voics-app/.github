@@ -64,8 +64,10 @@ set_runner_var() {
 
 case "$cmd" in
   up)
+    echo "Starting $COUNT runner(s) with label $LABEL (first run downloads the image; each runner installs build packages, 2-5 min)"
     for i in $(seq 1 "$COUNT"); do
       c="$CONTAINER-$i"; n="$LABEL-$i"
+      echo "  [$i/$COUNT] starting container $c"
       docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
       docker run -d --name "$c" --user root \
@@ -74,8 +76,11 @@ case "$cmd" in
         "$IMAGE" bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq $PACKAGES >/dev/null && cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
     done
     online=0
-    for _ in $(seq 1 90); do
+    echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
+    last=-1
+    for _ in $(seq 1 150); do
       online="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$LABEL-\")) | select(.status==\"online\")] | length")"
+      [[ "$online" != "$last" ]] && { echo "  online: $online/$COUNT"; last="$online"; }
       [[ "$online" -ge "$COUNT" ]] && break
       sleep 2
     done
