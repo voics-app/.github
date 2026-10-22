@@ -1,0 +1,79 @@
+# Reusable GitHub Actions cache hygiene. Deletes caches of the calling repository that were not used for
+# `max-age-days`, then, if the rest still exceeds `max-total-gb`, the least recently used ones until it fits.
+# GitHub evicts on its own at 10 GB per repository, but only oldest-first and without regard for which cache
+# is useful; a weekly sweep keeps rust-cache/pnpm/mix caches fresh and the limit from thrashing.
+#
+# Call it from a weekly schedule in each repo:
+#   on: { schedule: [{ cron: "17 3 * * 0" }], workflow_dispatch: {} }
+#   jobs: { cleanup: { permissions: { actions: write, contents: read }, uses: discordy-voics/.github/.github/workflows/cache-cleanup.yml@main } }
+name: cache-cleanup
+
+on:
+  workflow_call:
+    inputs:
+      max-age-days:
+        description: "Delete caches not accessed for this many days."
+        required: false
+        type: number
+        default: 7
+      max-total-gb:
+        description: "After the age sweep, delete least recently used caches until the total is below this size."
+        required: false
+        type: number
+        default: 8
+      dry-run:
+        description: "Only report what would be deleted."
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Only report what would be deleted."
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: "41 3 * * 0"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    name: cache-cleanup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MAX_AGE_DAYS: ${{ inputs.max-age-days || 7 }}
+          MAX_TOTAL_GB: ${{ inputs.max-total-gb || 8 }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          caches="$(gh cache list --limit 1000 --sort last_accessed_at --order asc --json id,key,sizeInBytes,lastAccessedAt)"
+          total="$(jq '[.[].sizeInBytes] | add // 0' <<< "$caches")"
+          echo "caches: $(jq length <<< "$caches"), total $((total / 1048576)) MiB"
+
+          cutoff="$(date -u -d "-${MAX_AGE_DAYS} days" +%Y-%m-%dT%H:%M:%SZ)"
+          limit=$((MAX_TOTAL_GB * 1073741824))
+          # Oldest first: everything past the cutoff, then the oldest of the rest while still over the limit.
+          ids="$(jq -r --arg cutoff "$cutoff" --argjson limit "$limit" --argjson total "$total" '
+            (map(select(.lastAccessedAt < $cutoff))) as $old
+            | ([$old[].sizeInBytes] | add // 0) as $freed
+            | (map(select(.lastAccessedAt >= $cutoff))) as $rest
+            | (reduce $rest[] as $c ({left: ($total - $freed), pick: []};
+                if .left > $limit then {left: (.left - $c.sizeInBytes), pick: (.pick + [$c])} else . end)).pick as $extra
+            | ($old + $extra)[] | "\(.id)\t\(.sizeInBytes)\t\(.key)"' <<< "$caches")"
+
+          if [[ -z "$ids" ]]; then echo "nothing to delete"; exit 0; fi
+          n=0
+          while IFS=$'\t' read -r id size key; do
+            echo "delete ${key} ($((size / 1048576)) MiB)"
+            if [[ "$DRY_RUN" != "true" ]]; then gh cache delete "$id" || true; fi
+            n=$((n + 1))
+          done <<< "$ids"
+          echo "### cache-cleanup: ${n} cache(s) $([[ "$DRY_RUN" == true ]] && echo 'would be ')deleted" >> "$GITHUB_STEP_SUMMARY"
