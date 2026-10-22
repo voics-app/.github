@@ -128,13 +128,14 @@ jobs:
         with:
           toolchain: ${{ inputs.toolchain }}
           components: clippy
-      # sccache (GitHub Actions cache backend on hosted runners, the persistent /cache volume on
-      # self-hosted ones) reuses compiled dependencies across Cargo.lock changes, where rust-cache misses.
+      # sccache on self-hosted runners only (compiled dependencies persist in the /cache volume across
+      # runs). Measured on hosted runners it did not help (gitops#38: api clippy 48s -> 105s, test unchanged
+      # next to rust-cache), so it is not enabled there.
       - uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11
+        if: env.SELF_HOSTED == 'true'
       - name: Enable sccache
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          if [[ "$SELF_HOSTED" != true ]]; then echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"; fi
+        if: env.SELF_HOSTED == 'true'
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}
@@ -180,13 +181,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ inputs.toolchain }}
-      # sccache (GitHub Actions cache backend on hosted runners, the persistent /cache volume on
-      # self-hosted ones) reuses compiled dependencies across Cargo.lock changes, where rust-cache misses.
+      # sccache on self-hosted runners only (compiled dependencies persist in the /cache volume across
+      # runs). Measured on hosted runners it did not help (gitops#38: api clippy 48s -> 105s, test unchanged
+      # next to rust-cache), so it is not enabled there.
       - uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11
+        if: env.SELF_HOSTED == 'true'
       - name: Enable sccache
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          if [[ "$SELF_HOSTED" != true ]]; then echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"; fi
+        if: env.SELF_HOSTED == 'true'
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}
