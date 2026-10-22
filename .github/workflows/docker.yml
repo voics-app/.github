@@ -229,7 +229,7 @@ jobs:
             # Layer cache in the registry (shared by every runner and branch). Hosted runners use a
             # docker-container builder and export the full cache; the self-hosted `docker` driver cannot
             # export a registry cache, so it imports it and embeds an inline cache in the pushed image.
-            if [[ "$SELF_HOSTED" == "true" ]]; then
+            if [[ "${SELF_HOSTED:-false}" == "true" ]]; then
               echo "cache-from<<${delimiter}"
               echo "type=registry,ref=${image}:buildcache"
               echo "type=registry,ref=${image}:latest"
