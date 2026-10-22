@@ -8,6 +8,9 @@
 #   scripts/runner.sh use    github | <label>                           switch every repo's CI_RUNNER
 #   scripts/runner.sh status [--host user@vm] [--label L]
 #
+# Every runner container mounts the persistent volume discordy-ci-cache-<label> at /cache (cargo registry and
+# git, sccache, pnpm store, hex/mix), so dependency caches survive container recreation.
+#
 # Without --host the runners run on this machine's Docker (label karma-pc). With --host they run on the
 # VM's Docker over SSH (label vm-<host>, override with --label); prepare a fresh VM once with
 # scripts/runner-vm-bootstrap.sh user@vm. `up` does not switch CI_RUNNER by itself except for the PC
@@ -47,6 +50,10 @@ else
   LABEL="${LABEL:-${PC_RUNNER_LABEL:-karma-pc}}"
 fi
 CONTAINER="discordy-runner-$LABEL"
+# Persistent host cache shared by all runner containers of this label (cargo registry/git, sccache, pnpm
+# store, hex/mix). A named volume survives container recreation (`down` + `up`); remove it explicitly with
+# `docker volume rm $CACHE_VOLUME` to reset caches. Mounted at /cache; see the `up` command.
+CACHE_VOLUME="discordy-ci-cache-$LABEL"
 # Runner NAMES must be unique across machines (registration uses --replace, and down removes by name),
 # while several machines may share one LABEL to form a pool. Names get a short id of this machine.
 if [[ -n "$HOST" ]]; then
@@ -144,6 +151,7 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins && curl -fsSL https://github.com/
     echo "CI_RUNNER (api): $v"
     echo "this machine: runners named $PREFIX-N, label $LABEL"
     docker ps --filter "name=^$CONTAINER" --format '{{.Names}}: {{.Status}}' 2>/dev/null || true
+    docker run --rm -v "$CACHE_VOLUME:/cache" alpine du -sh /cache 2>/dev/null | sed "s|^|cache volume $CACHE_VOLUME: |" || true
     runners_json | jq -r 'select(.status=="online") | "\(.name) [\([.labels[].name]|join(","))] busy=\(.busy)"'
     ;;
   *) echo "usage: $0 up|down|use|status [--host user@vm] [--count N] [--label L]"; exit 2 ;;
