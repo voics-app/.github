@@ -97,6 +97,8 @@ jobs:
   clippy:
     name: ${{ inputs.image-name || 'rust' }} / clippy
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    env:
+      SELF_HOSTED: ${{ inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github') }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -126,6 +128,13 @@ jobs:
         with:
           toolchain: ${{ inputs.toolchain }}
           components: clippy
+      # sccache (GitHub Actions cache backend on hosted runners, the persistent /cache volume on
+      # self-hosted ones) reuses compiled dependencies across Cargo.lock changes, where rust-cache misses.
+      - uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11
+      - name: Enable sccache
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          if [[ "$SELF_HOSTED" != true ]]; then echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"; fi
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}
@@ -140,6 +149,8 @@ jobs:
   test:
     name: ${{ inputs.image-name || 'rust' }} / test
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    env:
+      SELF_HOSTED: ${{ inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github') }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
       run:
@@ -169,6 +180,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ inputs.toolchain }}
+      # sccache (GitHub Actions cache backend on hosted runners, the persistent /cache volume on
+      # self-hosted ones) reuses compiled dependencies across Cargo.lock changes, where rust-cache misses.
+      - uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11
+      - name: Enable sccache
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          if [[ "$SELF_HOSTED" != true ]]; then echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"; fi
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}

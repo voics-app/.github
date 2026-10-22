@@ -1,0 +1,3 @@
+# Custom self-hosted runner labels used by the shared workflows.
+self-hosted-runner:
+  labels: [discordy, vm-runner, karma-pc]
