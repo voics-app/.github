@@ -74,7 +74,7 @@ else
 fi
 
 # Works on old gh versions too (gh variable get is recent); empty when the variable is not set.
-get_runner_var() { gh api "repos/$ORG/api/actions/variables/CI_RUNNER" -q .value 2>/dev/null || true; }
+get_runner_var() { local v; v="$(gh api "repos/$ORG/api/actions/variables/CI_RUNNER" -q .value 2>/dev/null)" && printf %s "$v" || true; }
 runners_json() { gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[]"; }
 set_runner_var() {
   local targets=("${REPOS[@]}")
