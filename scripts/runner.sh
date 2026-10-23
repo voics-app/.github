@@ -24,7 +24,7 @@ command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 ORG=discordy-voics
 IMAGE=ghcr.io/actions/actions-runner:2.338.0   # same runner version as the in-cluster ARC scale set
 # The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
-PACKAGES="libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 python3-yaml git curl ca-certificates xz-utils"
+PACKAGES="gettext-base libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 python3-yaml git curl ca-certificates xz-utils"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
 # Repos whose CI runs on self-hosted runners when they are up (heavy Rust/Docker builds; free). The rest
 # stay on GitHub-hosted runners (cheap, light jobs; $15/month budget). Override with SELF_HOSTED_REPOS="...".
