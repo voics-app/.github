@@ -96,6 +96,7 @@ case "$cmd" in
 USER root
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /usr/local/lib/docker/cli-plugins && curl -fsSL https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
 ' "$IMAGE" "$PACKAGES"       | docker build --progress=plain -t "$LOCAL_IMAGE" - 2>&1 | grep --line-buffered -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed -u 's/^/    /' || true
     docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || { echo "building $LOCAL_IMAGE failed"; exit 1; }
     for i in $(seq 1 "$COUNT"); do
