@@ -35,6 +35,10 @@ switch ($Command) {
     $token = gh api -X POST "orgs/$Org/actions/runners/registration-token" -q .token
     Push-Location $Dir
     & .\config.cmd --unattended --replace --url "https://github.com/$Org" --token $token --name $Name --labels $Label --no-default-labels --work _work | Out-Null
+    # Git Bash first: otherwise `shell: bash` resolves to C:\Windows\System32\bash.exe (WSL) and steps fail
+    $git = 'C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin'
+    $path = "$git;" + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+    Set-Content -Path "$Dir\.path" -Value $path -Encoding ascii
     Start-Process -FilePath "$Dir\run.cmd" -WorkingDirectory $Dir -WindowStyle Hidden
     Pop-Location
     for ($i = 0; $i -lt 30; $i++) {
