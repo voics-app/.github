@@ -24,7 +24,7 @@ command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 ORG=discordy-voics
 IMAGE=ghcr.io/actions/actions-runner:2.338.0   # same runner version as the in-cluster ARC scale set
 # The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
-PACKAGES="libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 git curl ca-certificates xz-utils"
+PACKAGES="libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 python3-yaml git curl ca-certificates xz-utils"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
 # Repos whose CI runs on self-hosted runners when they are up (heavy Rust/Docker builds; free). The rest
 # stay on GitHub-hosted runners (cheap, light jobs; $15/month budget). Override with SELF_HOSTED_REPOS="...".
@@ -96,6 +96,7 @@ case "$cmd" in
 USER root
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /usr/local/lib/docker/cli-plugins && curl -fsSL https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
 ' "$IMAGE" "$PACKAGES"       | docker build --progress=plain -t "$LOCAL_IMAGE" - 2>&1 | grep --line-buffered -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed -u 's/^/    /' || true
     docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || { echo "building $LOCAL_IMAGE failed"; exit 1; }
     for i in $(seq 1 "$COUNT"); do
