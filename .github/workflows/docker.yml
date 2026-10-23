@@ -144,6 +144,36 @@ jobs:
           persist-credentials: false
           fetch-depth: 0   # release tags are needed to derive the pre-release version
 
+      - name: CI cache policy
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_CACHE: ${{ vars.CI_CACHE }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # on: persistent self-hosted caches (Trivy DB, preinstalled cosign) may be used.
+          # clean: the image is built without any layer cache (cold build, or a release build: main, tags,
+          # release/*, hotfix/*). A published release image never reuses cached compile layers (ADR-0022).
+          on=true; why="persistent cache on"; cold=false
+          if [[ "${CI_CACHE,,}" == off || "$EVENT" == schedule ]] || jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then cold=true; fi
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
+          elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
+          elif [[ "$cold" == true ]]; then on=false; why="cold build (CI_CACHE=off, ci-no-cache label or scheduled run)"; fi
+          release=false
+          if [[ "$REF" == refs/heads/main || "$REF" == refs/tags/* || "$REF" == refs/heads/release/* || "$REF" == refs/heads/hotfix/* ]]; then release=true; fi
+          clean=false; if [[ "$cold" == true || "$release" == true ]]; then clean=true; fi
+          {
+            echo "CI_CACHE_ON=$on"
+            echo "CI_DOCKER_CLEAN=$clean"
+            if [[ "$on" == true ]] && command -v trivy >/dev/null; then echo "CI_HAVE_TRIVY=true"; fi
+            if [[ "$on" == true ]] && command -v cosign >/dev/null; then echo "CI_HAVE_COSIGN=true"; fi
+            if [[ "$on" == true ]]; then echo "TRIVY_CACHE_DIR=/cache/trivy"
+            elif [[ "$RUNNER_ENVIRONMENT" == self-hosted ]]; then echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy"; fi
+          } >> "$GITHUB_ENV"
+          echo "CI cache: on=$on clean-image-build=$clean ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Derive version, tags and labels
         id: meta
         env:
@@ -229,7 +259,12 @@ jobs:
             # Layer cache in the registry (shared by every runner and branch). Hosted runners use a
             # docker-container builder and export the full cache; the self-hosted `docker` driver cannot
             # export a registry cache, so it imports it and embeds an inline cache in the pushed image.
-            if [[ "${SELF_HOSTED:-false}" == "true" ]]; then
+            if [[ "${CI_DOCKER_CLEAN:-false}" == "true" ]]; then
+              # Clean build (cold or release): no layer cache is imported.
+              echo "cache-from="
+              if [[ "${SELF_HOSTED:-false}" == "true" ]]; then echo "cache-to=type=inline"
+              else echo "cache-to=type=registry,ref=${image}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true"; fi
+            elif [[ "${SELF_HOSTED:-false}" == "true" ]]; then
               echo "cache-from<<${delimiter}"
               echo "type=registry,ref=${image}:buildcache"
               echo "type=registry,ref=${image}:latest"
@@ -303,8 +338,26 @@ jobs:
           push: false
           provenance: false
           cache-from: ${{ steps.meta.outputs.cache-from }}
+          no-cache: ${{ env.CI_DOCKER_CLEAN == 'true' }}
 
+      # Trivy from the self-hosted runner image with the vulnerability DB on the /cache volume (flock: the DB is
+      # not safe to update from two jobs at once).
+      - name: Trivy vulnerability scan (preinstalled)
+        if: env.CI_HAVE_TRIVY == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.scan-tag }}
+          SEVERITY: ${{ inputs.trivy-severity }}
+          IGNORE_UNFIXED: ${{ inputs.trivy-ignore-unfixed }}
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2,mirror.gcr.io/aquasec/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-java-db:1,mirror.gcr.io/aquasec/trivy-java-db:1
+        run: |
+          set -euo pipefail
+          mkdir -p "$TRIVY_CACHE_DIR"
+          args=(image --severity "$SEVERITY" --exit-code 1 --format table --timeout 20m)
+          if [[ "$IGNORE_UNFIXED" == true ]]; then args+=(--ignore-unfixed); fi
+          flock "$TRIVY_CACHE_DIR/.lock" trivy "${args[@]}" "$IMAGE_REF"
       - name: Trivy vulnerability scan
+        if: env.CI_HAVE_TRIVY != 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -337,6 +390,7 @@ jobs:
           push: true
           cache-from: ${{ steps.meta.outputs.cache-from }}
           cache-to: ${{ steps.meta.outputs.cache-to }}
+          no-cache: ${{ env.CI_DOCKER_CLEAN == 'true' }}
 
       - name: Generate SBOM (syft)
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -351,7 +405,7 @@ jobs:
           upload-release-assets: "false"
 
       - name: Install cosign
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.meta.outputs.publish == 'true' && env.CI_HAVE_COSIGN != 'true'
         # Direct pinned download: sigstore/cosign-installer needs `envsubst`, absent from the self-hosted runner image.
         run: |
           set -euo pipefail

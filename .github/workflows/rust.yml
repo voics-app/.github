@@ -1,5 +1,11 @@
 # Reusable Rust checks: rustfmt, clippy (warnings are errors), cargo test and
-# cargo-audit. Jobs run in parallel.
+# cargo-audit.
+#   GitHub-hosted runners: fmt, clippy, test and audit run as parallel jobs (Swatinem/rust-cache).
+#   Self-hosted runners:   one fmt -> clippy -> test job (compile once) on the persistent /cache volume and the
+#                          toolchains baked into the runner image (scripts/runner.sh); see ADR-0022.
+# Cache switch: repo/org variable CI_CACHE=off (or the PR label `ci-no-cache`, or a scheduled run) makes the
+# self-hosted job a clean from-scratch build. Release builds (main, tags, release/*, hotfix/*) never reuse a
+# persistent cargo target/.
 name: rust
 
 on:
@@ -78,8 +84,166 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # Self-hosted runners: fmt -> clippy -> test in one job, so the workspace compiles once and fails fast
+  # (fmt is seconds, clippy catches most errors before the slow test build).
+  check:
+    name: ${{ inputs.image-name || 'rust' }} / fmt + clippy + test
+    if: ${{ inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github') }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    services: ${{ fromJSON(inputs.services) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: CI cache policy
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_CACHE: ${{ vars.CI_CACHE }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          on=true; why="persistent cache on"
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
+          elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
+          elif [[ "${CI_CACHE,,}" == off ]]; then on=false; why="CI_CACHE=off"
+          elif jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then on=false; why="PR label ci-no-cache"
+          elif [[ "$EVENT" == schedule ]]; then on=false; why="scheduled cold build"
+          fi
+          # A persistent cargo target/ is only ever reused on pull requests and develop pushes. Releases
+          # (main, tags, release/*, hotfix/*, PRs into main) always compile from scratch (ADR-0022).
+          reuse=false
+          if [[ "$on" == true ]]; then
+            if [[ "$EVENT" == pull_request* && "$BASE_REF" != main && ! "$HEAD_REF" =~ ^(release|hotfix)/ ]]; then reuse=true
+            elif [[ "$EVENT" == push && "$REF" == refs/heads/develop ]]; then reuse=true; fi
+          fi
+          {
+            echo "CI_CACHE_ON=$on"
+            echo "CI_REUSE_TARGET=$reuse"
+            if [[ "$RUNNER_ENVIRONMENT" == self-hosted && "$on" != true ]]; then
+              # Cold build: nothing persisted in the image or the volume is used (toolchain installed from scratch).
+              echo "CARGO_HOME=$RUNNER_TEMP/cargo-home"
+              echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-home"
+            fi
+          } >> "$GITHUB_ENV"
+          echo "CI cache: on=$on reuse-target=$reuse ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Prepare environment
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
+          EXTRA_ENV: ${{ inputs.env }}
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYSTEM_PACKAGES" ]]; then
+            read -ra packages <<< "$SYSTEM_PACKAGES"
+            if ! dpkg -s "${packages[@]}" >/dev/null 2>&1; then
+              SUDO=""; if command -v sudo >/dev/null && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
+              $SUDO apt-get update -qq
+              $SUDO apt-get install -y -qq --no-install-recommends "${packages[@]}"
+            fi
+          fi
+          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
+          if [[ -n "$DEPS_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+          fi
+      # Toolchain baked into the runner image: use it and skip the download (cold builds install it fresh).
+      - name: Toolchain from the runner image
+        id: tc
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -euo pipefail
+          if [[ "$CI_CACHE_ON" == true ]] && command -v rustup >/dev/null \
+             && rustup toolchain list | grep -qE "^${TOOLCHAIN//./\\.}(-|$)" \
+             && rustup component list --installed --toolchain "$TOOLCHAIN" | grep -q '^clippy' \
+             && rustup component list --installed --toolchain "$TOOLCHAIN" | grep -q '^rustfmt'; then
+            rustup default "$TOOLCHAIN"
+            echo "have=true" >> "$GITHUB_OUTPUT"
+            echo "using preinstalled toolchain $TOOLCHAIN"
+          fi
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        if: steps.tc.outputs.have != 'true'
+        with:
+          toolchain: ${{ inputs.toolchain }}
+          components: clippy, rustfmt
+      - name: fmt, clippy, test
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+          CLIPPY_ARGS: ${{ inputs.clippy-args }}
+          TEST_ARGS: ${{ inputs.test-args }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKDIR: ${{ inputs.working-directory }}
+          EXTRA_ENV: ${{ inputs.env }}
+        run: |
+          set -euo pipefail
+          if [[ "$CI_CACHE_ON" == true ]]; then
+            export CARGO_HOME=/cache/cargo   # registry + git downloads: safe to reuse everywhere (cargo locks it)
+            mkdir -p "$CARGO_HOME"
+          fi
+          target_note="clean target (workspace)"
+          if [[ "$CI_REUSE_TARGET" == true ]]; then
+            repo="${GITHUB_REPOSITORY#*/}"
+            lockhash="$( { [[ -f Cargo.lock ]] && cat Cargo.lock || find . -name Cargo.toml -not -path './target/*' | sort | xargs cat; } | sha256sum | cut -c1-16)"
+            # Key: lockfile + toolchain (rustc -vV) + arch + workdir + extra env (RUSTFLAGS etc.).
+            key="$( { rustc -vV; echo "$TOOLCHAIN"; uname -m; echo "$WORKDIR"; echo "$EXTRA_ENV"; echo "$lockhash"; } | sha256sum | cut -c1-16)"
+            base="/cache/target/$repo"; dir="$base/$key"
+            mkdir -p "$base"
+            # Keep the volume small (the VM disk is limited): drop target dirs idle for 7 days and keep only the
+            # 2 most recently used per repo. A dir still locked by a running job is never touched.
+            { find "$base" -mindepth 1 -maxdepth 1 -type d -mtime +7; ls -1dt "$base"/*/ 2>/dev/null | sed 's:/$::' | tail -n +3; } | sort -u | while IFS= read -r old; do
+              [[ "$old" == "$dir" ]] && continue
+              ( flock -n 8 || exit 0; rm -rf "$old" "$old.lock" ) 8>"$old.lock" || true
+            done
+            # One job at a time per target dir: a second concurrent job (same key) gets a private clean dir.
+            exec 9>"$dir.lock"
+            if flock -n 9; then
+              mkdir -p "$dir"; export CARGO_TARGET_DIR="$dir"; target_note="persistent target $key"
+              if command -v sccache >/dev/null; then
+                # Compiled dependencies are also cached by content (survives lockfile changes). Optional.
+                export SCCACHE_DIR=/cache/sccache SCCACHE_CACHE_SIZE=10G
+                if sccache --start-server >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache; fi
+              fi
+            else
+              echo "::notice::target dir $key is in use by another job: using a private clean target dir"
+              target_note="private clean target (key locked by another job)"
+            fi
+          fi
+          echo "target: $target_note"
+          echo "### $target_note" >> "$GITHUB_STEP_SUMMARY"
+          echo "::group::cargo fmt"
+          cargo fmt --all -- --check
+          echo "::endgroup::"
+          echo "::group::cargo clippy"
+          read -ra cargs <<< "$CLIPPY_ARGS"
+          cargo clippy "${cargs[@]}"
+          echo "::endgroup::"
+          echo "::group::cargo test"
+          read -ra targs <<< "$TEST_ARGS"
+          # Pull requests run the fast unit tests only (the pre-push hook runs them locally too); the
+          # integration tests (testcontainers) run on develop, main, release branches and tags.
+          if [[ "$EVENT_NAME" == pull_request* ]]; then targs+=(--lib --bins); fi
+          cargo test "${targs[@]}"
+          echo "::endgroup::"
+          if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then touch "$CARGO_TARGET_DIR"; fi
+          if [[ "${RUSTC_WRAPPER:-}" == sccache ]]; then sccache --show-stats | tail -8; fi
+      - name: Summary
+        if: inputs.description != ''
+        env:
+          TITLE: ${{ inputs.image-name || github.repository }}
+          DESCRIPTION: ${{ inputs.description }}
+        run: printf '### %s\n\n%s\n' "$TITLE" "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
+
   fmt:
     name: ${{ inputs.image-name || 'rust' }} / fmt
+    if: ${{ inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github') }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
@@ -96,9 +260,8 @@ jobs:
 
   clippy:
     name: ${{ inputs.image-name || 'rust' }} / clippy
+    if: ${{ inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github') }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
-    env:
-      SELF_HOSTED: ${{ inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github') }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -129,14 +292,6 @@ jobs:
         with:
           toolchain: ${{ inputs.toolchain }}
           components: clippy
-      # sccache on self-hosted runners only (compiled dependencies persist in the /cache volume across
-      # runs). Measured on hosted runners it did not help (gitops#38: api clippy 48s -> 105s, test unchanged
-      # next to rust-cache), so it is not enabled there.
-      - uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11
-        if: env.SELF_HOSTED == 'true'
-      - name: Enable sccache
-        if: env.SELF_HOSTED == 'true'
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}
@@ -150,9 +305,8 @@ jobs:
 
   test:
     name: ${{ inputs.image-name || 'rust' }} / test
+    if: ${{ inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github') }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
-    env:
-      SELF_HOSTED: ${{ inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github') }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
       run:
@@ -183,9 +337,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ inputs.toolchain }}
-      # sccache on self-hosted runners only (compiled dependencies persist in the /cache volume across
-      # runs). Measured on hosted runners it did not help (gitops#38: api clippy 48s -> 105s, test unchanged
-      # next to rust-cache), so it is not enabled there.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}
@@ -219,8 +370,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Self-hosted runners (CI_RUNNER) have no preinstalled Rust, unlike ubuntu-latest.
+      - name: CI cache policy
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_CACHE: ${{ vars.CI_CACHE }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          on=true
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted || ! -w /cache || "${CI_CACHE,,}" == off || "$EVENT" == schedule ]]              || jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then on=false; fi
+          echo "CI_CACHE_ON=$on" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_ENVIRONMENT" == self-hosted && "$on" == true ]]; then echo "CARGO_HOME=/cache/cargo" >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_ENVIRONMENT" == self-hosted ]]; then
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-home" >> "$GITHUB_ENV"; echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-home" >> "$GITHUB_ENV"
+          fi
+      # Toolchain baked into the self-hosted runner image (skipped when CI_CACHE is off or on hosted runners).
+      - name: Toolchain from the runner image
+        id: tc
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -euo pipefail
+          if [[ "$CI_CACHE_ON" == true ]] && command -v rustup >/dev/null &&
+             rustup toolchain list | grep -qE "^${TOOLCHAIN//./\\.}(-|$)"; then
+            rustup default "$TOOLCHAIN"; echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        if: steps.tc.outputs.have != 'true'
         with:
           toolchain: ${{ inputs.toolchain }}
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
