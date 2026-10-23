@@ -26,7 +26,11 @@ jobs:
         with:
           persist-credentials: false
       - name: actionlint
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+        # The binary, not `docker run -v`: on the self-hosted runners the Docker daemon is not on the same
+        # filesystem as the job, so the bind mount is empty ("no project was found").
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
 
   test:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -37,6 +41,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # Tool-cache Pythons on the self-hosted runner image cannot find libpython at exec time.
+      - run: echo "LD_LIBRARY_PATH=$pythonLocation/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
       - run: python -m pip install --quiet "pyyaml>=6,<7"
       - run: python -m unittest discover -s tests -v
 
