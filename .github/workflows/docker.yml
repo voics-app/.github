@@ -1,7 +1,7 @@
 # Reusable container image pipeline.
 #
 # build (buildx) -> Trivy scan (fails on CRITICAL) -> push to GHCR -> syft SBOM
-# -> cosign keyless signature + SBOM attestation.
+# -> cosign keyless signature + SBOM attestation (SBOM and signing only on main, tags and explicit release versions).
 #
 # Image: <registry>/<owner>/<image-name>, e.g. ghcr.io/discordy-voics/api.
 #
@@ -151,22 +151,25 @@ jobs:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
           # on: persistent self-hosted caches (Trivy DB, preinstalled cosign) may be used.
-          # clean: the image is built without any layer cache (cold build, or a release build: main, tags,
-          # release/*, hotfix/*). A published release image never reuses cached compile layers (ADR-0022).
+          # clean: the image is built without any layer cache (cold build: CI_CACHE=off, label ci-no-cache, schedule).
+          # Release images (main, tags) are compiled inside the Dockerfile from clean sources: layers are keyed by
+          # their inputs and no persistent cargo target/ exists in the build (ADR-0022).
           on=true; why="persistent cache on"; cold=false
           if [[ "${CI_CACHE,,}" == off || "$EVENT" == schedule ]] || jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then cold=true; fi
           if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
           elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
           elif [[ "$cold" == true ]]; then on=false; why="cold build (CI_CACHE=off, ci-no-cache label or scheduled run)"; fi
-          release=false
-          if [[ "$REF" == refs/heads/main || "$REF" == refs/tags/* || "$REF" == refs/heads/release/* || "$REF" == refs/heads/hotfix/* ]]; then release=true; fi
-          clean=false; if [[ "$cold" == true || "$release" == true ]]; then clean=true; fi
+          clean=false; if [[ "$cold" == true ]]; then clean=true; fi
+          # SBOM and signature only for releases (main, tags, explicit release version): not on develop/rc builds.
+          attest=false; if [[ "$REF" == refs/heads/main || "$REF" == refs/tags/* || -n "$VERSION_INPUT" ]]; then attest=true; fi
           {
             echo "CI_CACHE_ON=$on"
             echo "CI_DOCKER_CLEAN=$clean"
+            echo "CI_ATTEST=$attest"
             if [[ "$on" == true ]] && command -v trivy >/dev/null; then echo "CI_HAVE_TRIVY=true"; fi
             if [[ "$on" == true ]] && command -v cosign >/dev/null; then echo "CI_HAVE_COSIGN=true"; fi
             if [[ "$on" == true ]]; then echo "TRIVY_CACHE_DIR=/cache/trivy"
@@ -393,6 +396,7 @@ jobs:
           no-cache: ${{ env.CI_DOCKER_CLEAN == 'true' }}
 
       - name: Generate SBOM (syft)
+        if: env.CI_ATTEST == 'true'
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ steps.meta.outputs.publish == 'true' && format('{0}@{1}', steps.meta.outputs.image, steps.push.outputs.digest) || steps.meta.outputs.scan-tag }}
@@ -405,7 +409,7 @@ jobs:
           upload-release-assets: "false"
 
       - name: Install cosign
-        if: steps.meta.outputs.publish == 'true' && env.CI_HAVE_COSIGN != 'true'
+        if: steps.meta.outputs.publish == 'true' && env.CI_ATTEST == 'true' && env.CI_HAVE_COSIGN != 'true'
         # Direct pinned download: sigstore/cosign-installer needs `envsubst`, absent from the self-hosted runner image.
         run: |
           set -euo pipefail
@@ -416,7 +420,7 @@ jobs:
           echo "$HOME/.cosign" >> "$GITHUB_PATH"
 
       - name: Sign image and attest SBOM (keyless)
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.meta.outputs.publish == 'true' && env.CI_ATTEST == 'true'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}
         run: |
