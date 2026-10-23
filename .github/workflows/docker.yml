@@ -313,6 +313,12 @@ jobs:
           ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
           exit-code: "1"
           format: table
+          # Self-hosted runners download the vulnerability DB slowly: the 5 minute default aborts the scan with
+          # no output (api v0.6.0). Try GHCR first, fall back to the GCR mirror, and allow a longer download.
+          timeout: 20m
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2,mirror.gcr.io/aquasec/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-java-db:1,mirror.gcr.io/aquasec/trivy-java-db:1
 
       - name: Build and push
         id: push
