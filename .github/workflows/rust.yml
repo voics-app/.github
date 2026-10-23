@@ -114,9 +114,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "$SYSTEM_PACKAGES" ]]; then
-            sudo apt-get update -qq
+            SUDO=""; if command -v sudo >/dev/null && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
+            $SUDO apt-get update -qq
             read -ra packages <<< "$SYSTEM_PACKAGES"
-            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+            $SUDO apt-get install -y -qq --no-install-recommends "${packages[@]}"
           fi
           jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
           if [[ -n "$DEPS_TOKEN" ]]; then
@@ -168,9 +169,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "$SYSTEM_PACKAGES" ]]; then
-            sudo apt-get update -qq
+            SUDO=""; if command -v sudo >/dev/null && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
+            $SUDO apt-get update -qq
             read -ra packages <<< "$SYSTEM_PACKAGES"
-            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"
+            $SUDO apt-get install -y -qq --no-install-recommends "${packages[@]}"
           fi
           jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
           if [[ -n "$DEPS_TOKEN" ]]; then
