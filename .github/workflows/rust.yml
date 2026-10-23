@@ -186,11 +186,6 @@ jobs:
       # sccache on self-hosted runners only (compiled dependencies persist in the /cache volume across
       # runs). Measured on hosted runners it did not help (gitops#38: api clippy 48s -> 105s, test unchanged
       # next to rust-cache), so it is not enabled there.
-      - uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11
-        if: env.SELF_HOSTED == 'true'
-      - name: Enable sccache
-        if: env.SELF_HOSTED == 'true'
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ inputs.working-directory }}
