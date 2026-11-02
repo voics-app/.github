@@ -253,6 +253,8 @@ How it works:
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
 - **Requirements:** `gh` with `admin:org` (registration tokens), Docker, and `jq`. `--host` also needs SSH access.
 
+**Windows runner on the owner PC (client installer):** `powershell -File scriptsunner-win.ps1 up` downloads and registers a native runner (label `karma-win`, not a container, so it uses the PC's Node/pnpm/Rust/MSVC toolchain) and sets the client repo variable `WINDOWS_RUNNER=karma-win`. The client `release.yml` Windows job then builds the installer on the PC instead of GitHub's `windows-latest`. `runner-win.ps1 down` removes it and releases fall back to `windows-latest`; `status` shows the state. It does not survive a reboot: run `up` again. While it is down and `WINDOWS_RUNNER` is set, client releases wait in the queue.
+
 **Split by default:** `up` and `use <label>` switch only the heavy repos (api, messages, gateway, voice, client) to self-hosted runners; the light repos (docs, website, contracts, gitops, .github, bots-sdk, admin) keep GitHub-hosted runners within the $15/month budget. Change the set with `SELF_HOSTED_REPOS="api messages" scripts/runner.sh up`. `use github` resets all repos.
 
 **Several VMs:** every machine names its runners `<label>-<machine id>-N`, so names never collide, even when two VMs have the same hostname. Give VMs the same `--label` to make one pool: `scripts/runner.sh up --label vm-pool` on each VM, and jobs go to whichever runner is free. `down` removes only that machine's runners, and switches CI back to GitHub only when no other runner with the label is online.
