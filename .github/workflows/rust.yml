@@ -208,8 +208,11 @@ jobs:
               mkdir -p "$dir"; export CARGO_TARGET_DIR="$dir"; target_note="persistent target $key"
               if command -v sccache >/dev/null; then
                 # Compiled dependencies are also cached by content (survives lockfile changes). Optional.
+                # The VM runners share localhost (host networking): one server port per runner, and never
+                # --stop-server (it would kill the other runner's server).
                 export SCCACHE_DIR=/cache/sccache SCCACHE_CACHE_SIZE=10G
-                if sccache --start-server >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache; fi
+                export SCCACHE_SERVER_PORT=$((4300 + $(printf '%s' "${RUNNER_NAME:-x}" | cksum | cut -d' ' -f1) % 100))
+                if sccache --start-server >/dev/null 2>&1 && sccache --show-stats >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache; fi
               fi
             else
               echo "::notice::target dir $key is in use by another job: using a private clean target dir"
@@ -218,19 +221,31 @@ jobs:
           fi
           echo "target: $target_note"
           echo "### $target_note" >> "$GITHUB_STEP_SUMMARY"
+          # sccache is an optimisation only: if it breaks a compile, retry that command without it.
+          run() {
+            if [[ "${RUSTC_WRAPPER:-}" != sccache ]]; then "$@"; return; fi
+            local rc=0
+            set +e
+            "$@" 2>&1 | tee "$RUNNER_TEMP/cargo-out.log"
+            rc="${PIPESTATUS[0]}"
+            set -e
+            if [[ "$rc" -ne 0 ]] && grep -q 'sccache' "$RUNNER_TEMP/cargo-out.log"; then
+              echo "::warning::sccache failed, retrying without it"; unset RUSTC_WRAPPER; "$@"
+            else return "$rc"; fi
+          }
           echo "::group::cargo fmt"
           cargo fmt --all -- --check
           echo "::endgroup::"
           echo "::group::cargo clippy"
           read -ra cargs <<< "$CLIPPY_ARGS"
-          cargo clippy "${cargs[@]}"
+          run cargo clippy "${cargs[@]}"
           echo "::endgroup::"
           echo "::group::cargo test"
           read -ra targs <<< "$TEST_ARGS"
           # Pull requests run the fast unit tests only (the pre-push hook runs them locally too); the
           # integration tests (testcontainers) run on develop, main, release branches and tags.
           if [[ "$EVENT_NAME" == pull_request* ]]; then targs+=(--lib --bins); fi
-          cargo test "${targs[@]}"
+          run cargo test "${targs[@]}"
           echo "::endgroup::"
           if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then touch "$CARGO_TARGET_DIR"; fi
           if [[ "${RUSTC_WRAPPER:-}" == sccache ]]; then sccache --show-stats | tail -8; fi
