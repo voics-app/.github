@@ -270,7 +270,7 @@ On self-hosted runners the shared workflows use a persistent cache volume and th
 | cargo home (registry, git, advisory db) | `/cache/cargo` | every run with the cache on |
 | cargo `target/` | `/cache/target/<repo>/<key>/` (key = `Cargo.lock` + `rustc -vV` + toolchain + arch + workdir + `env` input) | pull requests and develop pushes only, one job at a time per key (`flock`, a concurrent job gets a private clean dir) |
 | sccache | `/cache/sccache` | same as `target/` |
-| pnpm store, corepack | `/cache/pnpm-store`, `/cache/corepack` | every run with the cache on |
+| pnpm store, corepack | `<work dir>/.pnpm-store` (same mount as the checkout, so pnpm hardlinks instead of copying), `/cache/corepack` | every run with the cache on |
 | hex, Elixir `deps/_build` snapshot | `/cache/hex`, `/cache/mixcache/<repo>/<key>/` | hex always; snapshot like `target/` |
 | Trivy DB | `/cache/trivy` | every run with the cache on |
 | toolchains | in the image: rust (+ clippy, rustfmt), Node 22 and 24, trivy, cosign, sccache, yq | detected, the setup step is skipped |

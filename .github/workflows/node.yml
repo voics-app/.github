@@ -166,7 +166,10 @@ jobs:
           if [[ "$CI_CACHE_ON" == true && "$NODE_VERSION" =~ ^[0-9]+$ && -x "/opt/node/$NODE_VERSION/bin/node" ]]; then
             export PATH="/opt/node/$NODE_VERSION/bin:$PATH"
             export COREPACK_HOME=/cache/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-            mkdir -p "$COREPACK_HOME" /cache/pnpm-store "$RUNNER_TEMP/corepack-bin"
+            # The pnpm store lives in the runner's work-dir mount, next to the checkout: on /cache (another mount in
+            # the container) pnpm cannot hardlink and copies every file (measured 15.4 s vs 2.8 s per install).
+            store="$(dirname "$RUNNER_WORKSPACE")/.pnpm-store"
+            mkdir -p "$COREPACK_HOME" "$store" "$RUNNER_TEMP/corepack-bin"
             corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
             if [[ -n "$PNPM_VERSION" ]]; then corepack prepare "pnpm@$PNPM_VERSION" --activate; fi
             # What actions/setup-node would write for registry-url + scope.
@@ -179,7 +182,7 @@ jobs:
               echo "COREPACK_HOME=/cache/corepack"
               echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0"
               echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc"
-              echo "npm_config_store_dir=/cache/pnpm-store"
+              echo "npm_config_store_dir=$store"
             } >> "$GITHUB_ENV"
             echo "have=true" >> "$GITHUB_OUTPUT"
             node --version
