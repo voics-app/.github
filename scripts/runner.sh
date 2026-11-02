@@ -7,9 +7,15 @@
 #   scripts/runner.sh down   [--host user@vm] [--label L]               deregister and remove them
 #   scripts/runner.sh use    github | <label>                           switch every repo's CI_RUNNER
 #   scripts/runner.sh status [--host user@vm] [--label L]
+#   scripts/runner.sh cache-clear [--host user@vm] [--label L] [--what all|cargo|target|sccache|pnpm|trivy|mix]
+#                                 [--layers] [--force]   wipe the persistent CI cache (README "CI cache")
 #
-# Every runner container mounts the persistent volume discordy-ci-cache-<label> at /cache (cargo registry and
-# git, sccache, pnpm store, hex/mix), so dependency caches survive container recreation.
+# Every runner container mounts the persistent volume discordy-ci-cache-<label> at /cache (cargo home, per-repo
+# cargo target dirs, sccache, pnpm store, hex/mix, Trivy DB), so caches survive container recreation. The
+# image also carries the toolchains (rust, node 22/24, trivy, cosign, sccache, yq); the shared workflows detect
+# and use them and skip their setup steps (switch everything off with the CI_CACHE=off variable).
+# Each runner's work dir is /srv/discordy-runner/<container>/_work at the same path on the host, so workflows can
+# bind-mount $GITHUB_WORKSPACE into containers they start on the host's Docker.
 #
 # Without --host the runners run on this machine's Docker (label karma-pc). With --host they run on the
 # VM's Docker over SSH (label vm-<host>, override with --label); prepare a fresh VM once with
@@ -25,18 +31,29 @@ ORG=discordy-voics
 IMAGE=ghcr.io/actions/actions-runner:2.338.0   # same runner version as the in-cluster ARC scale set
 # The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
 PACKAGES="gettext-base libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 python3-yaml git curl ca-certificates xz-utils"
+# Toolchains baked into the runner image (the shared workflows detect-and-skip their setup steps for these).
+RUST_TOOLCHAINS="1.99"
+NODE_MAJORS="22 24"
+SCCACHE_VERSION=0.10.0
+COSIGN_VERSION=v3.0.6
+COSIGN_SHA256=c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+# Container images the testcontainers suites start (pulled on `up` so tests do not wait for the registry).
+PREPULL_IMAGES="postgres:16-alpine postgres:17-alpine valkey/valkey:8-alpine scylladb/scylla:2025.1 pgsty/minio:RELEASE.2026-08-04T00-00-00Z docker.redpanda.com/redpandadata/redpanda:v24.2.7 docker.redpanda.com/redpandadata/redpanda:v25.1.1"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
 # Repos whose CI runs on self-hosted runners when they are up (heavy Rust/Docker builds; free). The rest
 # stay on GitHub-hosted runners (cheap, light jobs; $15/month budget). Override with SELF_HOSTED_REPOS="...".
 read -ra SELF_HOSTED <<< "${SELF_HOSTED_REPOS:-api messages gateway voice client}"
 
 cmd="${1:-status}"; shift || true
-HOST=""; COUNT=3; LABEL=""
+HOST=""; COUNT=3; LABEL=""; WHAT=all; LAYERS=0; FORCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
     --count) COUNT="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
+    --what) WHAT="$2"; shift 2 ;;
+    --layers) LAYERS=1; shift ;;
+    --force) FORCE=1; shift ;;
     *) TARGET="$1"; shift ;;
   esac
 done
@@ -92,22 +109,57 @@ case "$cmd" in
     # Build packages into a local image once (cached afterwards), instead of apt-get in every container.
     LOCAL_IMAGE="discordy-actions-runner:${IMAGE##*:}"
     echo "Building $LOCAL_IMAGE (first time takes a few minutes; cached afterwards)"
-    printf 'FROM %s
+    # Toolchains (rust, node, trivy, cosign, sccache) are baked in too: the shared workflows detect them and skip
+    # their setup steps. A failed build keeps the previous image (the inspect below only checks it exists).
+    docker build --progress=plain -t "$LOCAL_IMAGE" \
+      --build-arg BASE="$IMAGE" --build-arg PACKAGES="$PACKAGES" --build-arg RUST_TOOLCHAINS="$RUST_TOOLCHAINS" \
+      --build-arg NODE_MAJORS="$NODE_MAJORS" --build-arg SCCACHE_VERSION="$SCCACHE_VERSION" \
+      --build-arg COSIGN_VERSION="$COSIGN_VERSION" --build-arg COSIGN_SHA256="$COSIGN_SHA256" - <<'DOCKERFILE' 2>&1 \
+      | grep --line-buffered -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed -u 's/^/    /' || true
+ARG BASE
+FROM ${BASE}
 USER root
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends %s && rm -rf /var/lib/apt/lists/*
+ARG PACKAGES
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${PACKAGES} && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /usr/local/lib/docker/cli-plugins && curl -fsSL https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
-' "$IMAGE" "$PACKAGES"       | docker build --progress=plain -t "$LOCAL_IMAGE" - 2>&1 | grep --line-buffered -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed -u 's/^/    /' || true
+# Rust: rustup with the toolchains the workflows ask for (+ clippy, rustfmt). The workflows repoint CARGO_HOME
+# to the /cache volume; the toolchains stay here in RUSTUP_HOME.
+ARG RUST_TOOLCHAINS
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+ENV PATH=/opt/cargo/bin:${PATH}
+RUN set -e; curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path --default-toolchain none; \
+    for t in ${RUST_TOOLCHAINS}; do rustup toolchain install "$t" --profile minimal -c clippy -c rustfmt; done; \
+    rustup default "${RUST_TOOLCHAINS%% *}"; rm -rf /opt/cargo/registry
+ARG SCCACHE_VERSION
+RUN curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin --strip-components=1 "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache"
+# Node: latest of each major under /opt/node/<major>; pnpm comes through corepack (downloads cached in /cache).
+ARG NODE_MAJORS
+RUN set -e; for v in ${NODE_MAJORS}; do mkdir -p /opt/node/$v; \
+    f=$(curl -fsSL https://nodejs.org/dist/latest-v$v.x/SHASUMS256.txt | grep 'linux-x64.tar.xz' | awk '{print $2}'); \
+    curl -fsSL https://nodejs.org/dist/latest-v$v.x/$f | tar -xJ -C /opt/node/$v --strip-components=1; done
+# Trivy and cosign (docker.yml detects them and skips the downloads).
+RUN curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+ARG COSIGN_VERSION
+ARG COSIGN_SHA256
+RUN curl -fsSL -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64 && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - && chmod +x /usr/local/bin/cosign
+RUN mkdir -p /cache
+DOCKERFILE
     docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || { echo "building $LOCAL_IMAGE failed"; exit 1; }
+    echo "Pre-pulling testcontainers images"
+    for img in $PREPULL_IMAGES; do docker pull -q "$img" >/dev/null 2>&1 && echo "    $img" || echo "    $img: pull failed (skipped)"; done
     for i in $(seq 1 "$COUNT"); do
       c="$CONTAINER-$i"; n="$PREFIX-$i"
       echo "  [$i/$COUNT] starting container $c"
       docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
+      # The work dir has the same path on the host and in the container: jobs talk to the host's Docker, so a
+      # bind mount of $GITHUB_WORKSPACE (docker run -v "$GITHUB_WORKSPACE:/repo") must resolve on the host too.
+      work="/srv/discordy-runner/$c/_work"
       docker run -d --name "$c" --user root \
-        -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" \
-        -v /var/run/docker.sock:/var/run/docker.sock $NETWORK_ARGS \
-        "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
+        -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" -e WORK="$work" \
+        -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" -v "$CACHE_VOLUME:/cache" $NETWORK_ARGS \
+        "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels --work "$WORK" && unset REG_TOKEN && exec ./run.sh' >/dev/null
     done
     online=0
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
@@ -155,5 +207,24 @@ RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linu
     docker run --rm -v "$CACHE_VOLUME:/cache" alpine du -sh /cache 2>/dev/null | sed "s|^|cache volume $CACHE_VOLUME: |" || true
     runners_json | jq -r 'select(.status=="online") | "\(.name) [\([.labels[].name]|join(","))] busy=\(.busy)"'
     ;;
-  *) echo "usage: $0 up|down|use|status [--host user@vm] [--count N] [--label L]"; exit 2 ;;
+  cache-clear)
+    # Wipe the persistent CI cache (all of it, or --what a part). Refuses while a runner of this label is busy
+    # (a job could be writing a target dir) unless --force.
+    busy="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$PREFIX-\")) | select(.busy==true)] | length")"
+    if [[ "$busy" -gt 0 && "$FORCE" -ne 1 ]]; then echo "$busy runner(s) of $LABEL are busy; retry when idle (or --force)"; exit 1; fi
+    case "$WHAT" in
+      all) paths='/cache/* /cache/.[!.]*' ;;
+      cargo) paths='/cache/cargo' ;;
+      target) paths='/cache/target' ;;
+      sccache) paths='/cache/sccache' ;;
+      pnpm) paths='/cache/pnpm-store /cache/corepack' ;;
+      trivy) paths='/cache/trivy' ;;
+      mix) paths='/cache/mix /cache/hex /cache/mixcache' ;;
+      *) echo "--what must be all|cargo|target|sccache|pnpm|trivy|mix"; exit 2 ;;
+    esac
+    echo "Clearing $WHAT in volume $CACHE_VOLUME"
+    docker run --rm -v "$CACHE_VOLUME:/cache" alpine sh -c "rm -rf $paths; du -sh /cache"
+    if [[ "$LAYERS" -eq 1 ]]; then echo "Pruning the Docker build (layer) cache"; docker builder prune -af | tail -1; fi
+    ;;
+  *) echo "usage: $0 up|down|use|status|cache-clear [--host user@vm] [--count N] [--label L] [--what X] [--layers] [--force]"; exit 2 ;;
 esac
