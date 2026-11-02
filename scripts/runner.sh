@@ -14,6 +14,8 @@
 # cargo target dirs, sccache, pnpm store, hex/mix, Trivy DB), so caches survive container recreation. The
 # image also carries the toolchains (rust, node 22/24, trivy, cosign, sccache, yq); the shared workflows detect
 # and use them and skip their setup steps (switch everything off with the CI_CACHE=off variable).
+# Each runner's work dir is /srv/discordy-runner/<container>/_work at the same path on the host, so workflows can
+# bind-mount $GITHUB_WORKSPACE into containers they start on the host's Docker.
 #
 # Without --host the runners run on this machine's Docker (label karma-pc). With --host they run on the
 # VM's Docker over SSH (label vm-<host>, override with --label); prepare a fresh VM once with
@@ -151,10 +153,13 @@ DOCKERFILE
       echo "  [$i/$COUNT] starting container $c"
       docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
+      # The work dir has the same path on the host and in the container: jobs talk to the host's Docker, so a
+      # bind mount of $GITHUB_WORKSPACE (docker run -v "$GITHUB_WORKSPACE:/repo") must resolve on the host too.
+      work="/srv/discordy-runner/$c/_work"
       docker run -d --name "$c" --user root \
-        -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" \
-        -v /var/run/docker.sock:/var/run/docker.sock -v "$CACHE_VOLUME:/cache" $NETWORK_ARGS \
-        "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels && unset REG_TOKEN && exec ./run.sh' >/dev/null
+        -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" -e WORK="$work" \
+        -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" -v "$CACHE_VOLUME:/cache" $NETWORK_ARGS \
+        "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels --work "$WORK" && unset REG_TOKEN && exec ./run.sh' >/dev/null
     done
     online=0
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
