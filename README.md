@@ -273,7 +273,7 @@ On self-hosted runners the shared workflows use a persistent cache volume and th
 | pnpm store, corepack | `<work dir>/.pnpm-store` (same mount as the checkout, so pnpm hardlinks instead of copying), `/cache/corepack` | every run with the cache on |
 | hex, Elixir `deps/_build` snapshot | `/cache/hex`, `/cache/mixcache/<repo>/<key>/` | hex always; snapshot like `target/` |
 | Trivy DB | `/cache/trivy` | every run with the cache on |
-| toolchains | in the image: rust (+ clippy, rustfmt), Node 22 and 24, trivy, cosign, sccache, yq | detected, the setup step is skipped |
+| toolchains | in the image: rust (+ clippy, rustfmt), Node 22 and 24, Erlang/OTP 29.1.2 + Elixir 1.20.5, trivy, cosign, sccache, yq | detected and used when the cache is on and the versions match; otherwise the normal setup step installs them (GitHub-hosted runners always do) |
 | testcontainers images | pre-pulled by `runner.sh up` (postgres, valkey, scylla, minio, redpanda) | always |
 
 **Self-hosted `rust.yml`** runs one job `fmt + clippy + test` (fmt first, compile once, fail fast). Release builds never reuse a persistent `target/`: pushes to `main`, tags, `release/*`, `hotfix/*` and pull requests into `main` compile from a clean workspace; `docker.yml` image builds compile inside the Dockerfile (no persistent `target/`), reuse the host builder's layer cache on self-hosted runners and use `no-cache` on a cold build; SBOM and cosign only run on main, tags and release versions.
@@ -283,6 +283,10 @@ On self-hosted runners the shared workflows use a persistent cache volume and th
 - everywhere: set the repository or organization variable `CI_CACHE` to `off` (`gh variable set CI_CACHE --body off -R discordy-voics/<repo>`; delete it or set `on` to switch back on);
 - one pull request: add the label `ci-no-cache`, then push a commit (a re-run keeps the old label list);
 - automatically: every `schedule` run (weekly, `develop`) is cold, so a cache that hides a breakage is found within a week.
+
+**Tag builds don't repeat the checks.** A `vX.Y.Z` tag points at the merge commit that main's CI already built and tested in full (clean, ADR-0022). The rust/node/elixir workflows start with a small `verified` job on tag pushes: if the main push run of the same commit is green, the checks are skipped and only the image job runs (it builds the version image from the layers main already built). No green main run, or the lookup fails, means the checks run as usual. `scripts/release.sh` tags only after main CI is green. Callers grant the job `actions: read` (plus `contents: read`, and `packages: read` for node) on the jobs that call these workflows; the org's default token has no `actions` scope, and without it the run fails at startup.
+
+**Elixir is one job** (`<name> / checks`): format, compile with warnings as errors, credo, sobelow, hex.audit, then tests. Deps and the build are set up once instead of twice.
 
 **Clear it:** `scripts/runner.sh cache-clear [--host user@vm] [--label L] [--what all|cargo|target|sccache|pnpm|trivy|mix] [--layers] [--force]`. It refuses while a runner of that label is busy (unless `--force`); `--layers` also prunes the host's Docker build cache. `runner.sh status` prints the volume size. The workflows themselves prune target dirs idle for 7 days and keep the 2 newest per repo. **Disk guard:** under 15 GB free on `/cache` a Rust job first drops every other idle target dir (all repos), and under 8 GB it builds with a clean target. Clean builds (releases, cold runs, low disk) compile into `$RUNNER_TEMP/target`, which the runner wipes after the job, so nothing large stays in the workspace. sccache is capped at 4 GB.
 
