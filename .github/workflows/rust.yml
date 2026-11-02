@@ -188,7 +188,7 @@ jobs:
             export CARGO_HOME=/cache/cargo   # registry + git downloads: safe to reuse everywhere (cargo locks it)
             mkdir -p "$CARGO_HOME"
           fi
-          target_note="clean target (workspace)"
+          target_note="clean target"
           if [[ "$CI_REUSE_TARGET" == true ]]; then
             repo="${GITHUB_REPOSITORY#*/}"
             lockhash="$( { [[ -f Cargo.lock ]] && cat Cargo.lock || find . -name Cargo.toml -not -path './target/*' | sort | xargs cat; } | sha256sum | cut -c1-16)"
@@ -202,15 +202,30 @@ jobs:
               [[ "$old" == "$dir" ]] && continue
               ( flock -n 8 || exit 0; rm -rf "$old" "$old.lock" ) 8>"$old.lock" || true
             done
+            # Disk guard (the 73 GB VM filled up on 2026-11-02): under 15 GB free, drop every other idle target
+            # dir (all repos); under 8 GB, skip the persistent target and build clean in $RUNNER_TEMP.
+            free_gb() { df --output=avail -BG /cache | tail -1 | tr -dc 0-9; }
+            if (( $(free_gb) < 15 )); then
+              echo "::warning::/cache disk low ($(free_gb) GB free): pruning idle target dirs of all repos"
+              # shellcheck disable=SC2094  # lock the dir's .lock file, then delete it (same pattern as above)
+              for old in /cache/target/*/*/; do
+                old="${old%/}"; [[ "$old" == "$dir" ]] && continue
+                ( flock -n 8 || exit 0; rm -rf "$old" "$old.lock" ) 8>"$old.lock" || true
+              done
+            fi
+            low_disk=false; (( $(free_gb) < 8 )) && low_disk=true
             # One job at a time per target dir: a second concurrent job (same key) gets a private clean dir.
             exec 9>"$dir.lock"
-            if flock -n 9; then
+            if [[ "$low_disk" == true ]]; then
+              echo "::warning::/cache disk still low ($(free_gb) GB free): building with a clean target"
+              target_note="clean target (low disk)"
+            elif flock -n 9; then
               mkdir -p "$dir"; export CARGO_TARGET_DIR="$dir"; target_note="persistent target $key"
               if command -v sccache >/dev/null; then
                 # Compiled dependencies are also cached by content (survives lockfile changes). Optional.
                 # The VM runners share localhost (host networking): one server port per runner, and never
                 # --stop-server (it would kill the other runner's server).
-                export SCCACHE_DIR=/cache/sccache SCCACHE_CACHE_SIZE=10G
+                export SCCACHE_DIR=/cache/sccache SCCACHE_CACHE_SIZE=4G   # small: the persistent target does most of the work
                 export SCCACHE_SERVER_PORT=$((4300 + $(printf '%s' "${RUNNER_NAME:-x}" | cksum | cut -d' ' -f1) % 100))
                 if sccache --start-server >/dev/null 2>&1 && sccache --show-stats >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache; fi
               fi
@@ -218,6 +233,11 @@ jobs:
               echo "::notice::target dir $key is in use by another job: using a private clean target dir"
               target_note="private clean target (key locked by another job)"
             fi
+          fi
+          # Clean builds compile into the job's temp dir, which the runner wipes after the job: a release
+          # build's target/ (~10 GB for api) must not stay in the workspace and fill the runner's disk.
+          if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/target"; target_note="$target_note, in \$RUNNER_TEMP"
           fi
           echo "target: $target_note"
           echo "### $target_note" >> "$GITHUB_STEP_SUMMARY"
