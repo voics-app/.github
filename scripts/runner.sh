@@ -37,6 +37,12 @@ NODE_MAJORS="22 24"
 SCCACHE_VERSION=0.10.0
 COSIGN_VERSION=v3.0.6
 COSIGN_SHA256=c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+# Erlang/OTP and Elixir: the same hex.pm builds erlef/setup-beam installs on GitHub-hosted runners (elixir.yml
+# uses these when they match its otp-version/elixir-version inputs and runs setup-beam otherwise).
+OTP_VERSION=29.1.2
+OTP_SHA256=2cfca446976fc61962585a1c77e5d11ddb6f5fed83e84668a2c4acfaad60d22e
+ELIXIR_VERSION=1.20.5
+ELIXIR_SHA256=f424d6f0bb710a1d4898f2645d8ad6cab3f5eab8d71848c0dda2579d3a8e8a06
 # Container images the testcontainers suites start (pulled on `up` so tests do not wait for the registry).
 PREPULL_IMAGES="postgres:16-alpine postgres:17-alpine valkey/valkey:8-alpine scylladb/scylla:2025.1 pgsty/minio:RELEASE.2026-08-04T00-00-00Z docker.redpanda.com/redpandadata/redpanda:v24.2.7 docker.redpanda.com/redpandadata/redpanda:v25.1.1"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
@@ -114,7 +120,9 @@ case "$cmd" in
     docker build --progress=plain -t "$LOCAL_IMAGE" \
       --build-arg BASE="$IMAGE" --build-arg PACKAGES="$PACKAGES" --build-arg RUST_TOOLCHAINS="$RUST_TOOLCHAINS" \
       --build-arg NODE_MAJORS="$NODE_MAJORS" --build-arg SCCACHE_VERSION="$SCCACHE_VERSION" \
-      --build-arg COSIGN_VERSION="$COSIGN_VERSION" --build-arg COSIGN_SHA256="$COSIGN_SHA256" - <<'DOCKERFILE' 2>&1 \
+      --build-arg COSIGN_VERSION="$COSIGN_VERSION" --build-arg COSIGN_SHA256="$COSIGN_SHA256" \
+      --build-arg OTP_VERSION="$OTP_VERSION" --build-arg OTP_SHA256="$OTP_SHA256" \
+      --build-arg ELIXIR_VERSION="$ELIXIR_VERSION" --build-arg ELIXIR_SHA256="$ELIXIR_SHA256" - <<'DOCKERFILE' 2>&1 \
       | grep --line-buffered -E '^#[0-9]+ (DONE|CACHED|\[)|Setting up|ERROR' | sed -u 's/^/    /' || true
 ARG BASE
 FROM ${BASE}
@@ -143,6 +151,19 @@ RUN curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib
 ARG COSIGN_VERSION
 ARG COSIGN_SHA256
 RUN curl -fsSL -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64 && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - && chmod +x /usr/local/bin/cosign
+# Erlang/OTP + Elixir under /opt/beam/otp-<v> and /opt/beam/elixir-<v>-otp-<major> (elixir.yml detects them).
+ARG OTP_VERSION
+ARG OTP_SHA256
+ARG ELIXIR_VERSION
+ARG ELIXIR_SHA256
+RUN set -e; d=/opt/beam/otp-${OTP_VERSION}; mkdir -p $d /tmp/otp; \
+    curl -fsSL -o /tmp/otp.tgz "https://builds.hex.pm/builds/otp/ubuntu-24.04/OTP-${OTP_VERSION}.tar.gz"; \
+    echo "${OTP_SHA256}  /tmp/otp.tgz" | sha256sum -c -; tar -xzf /tmp/otp.tgz -C /tmp/otp --strip-components=1; \
+    cp -a /tmp/otp/. $d/; (cd $d && ./Install -minimal "$d" >/dev/null); rm -rf /tmp/otp /tmp/otp.tgz; \
+    e=/opt/beam/elixir-${ELIXIR_VERSION}-otp-${OTP_VERSION%%.*}; mkdir -p $e; \
+    curl -fsSL -o /tmp/elixir.zip "https://builds.hex.pm/builds/elixir/v${ELIXIR_VERSION}-otp-${OTP_VERSION%%.*}.zip"; \
+    echo "${ELIXIR_SHA256}  /tmp/elixir.zip" | sha256sum -c -; unzip -q /tmp/elixir.zip -d $e; rm /tmp/elixir.zip; \
+    PATH=$d/bin:$e/bin:$PATH elixir --version | tail -1
 RUN mkdir -p /cache
 DOCKERFILE
     docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || { echo "building $LOCAL_IMAGE failed"; exit 1; }

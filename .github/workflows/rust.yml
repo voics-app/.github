@@ -78,17 +78,50 @@ on:
 
 permissions:
   contents: read
+  actions: read   # tag builds look up the main run of the same commit (verified job)
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # Tag builds: a vX.Y.Z tag points at the merge commit that main's CI already built and tested in full (clean,
+  # ADR-0022). When that run is green, the checks are not repeated (the image job still builds and publishes the
+  # version). No green main run for this commit (or the lookup fails) -> the checks run as usual.
+  verified:
+    name: ${{ inputs.image-name || 'rust' }} / already verified on main
+    if: github.ref_type == 'tag'
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      done: ${{ steps.lookup.outputs.done }}
+    steps:
+      - id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -uo pipefail
+          wf="${WORKFLOW_REF%@*}"; wf="${wf##*/}"
+          run="$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&branch=main&event=push&status=success&per_page=1" -q '.workflow_runs[0].html_url // empty' 2>/dev/null || true)"
+          if [[ -n "$run" ]]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+            echo "### Checks skipped: commit $SHA already passed in full on main ($run)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+            echo "No green main run for $SHA: running the checks"
+          fi
+
   # Self-hosted runners: fmt -> clippy -> test in one job, so the workspace compiles once and fails fast
   # (fmt is seconds, clippy catches most errors before the slow test build).
   check:
     name: ${{ inputs.image-name || 'rust' }} / fmt + clippy + test
-    if: ${{ inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github') }}
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github')) }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
@@ -278,7 +311,8 @@ jobs:
 
   fmt:
     name: ${{ inputs.image-name || 'rust' }} / fmt
-    if: ${{ inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github') }}
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
@@ -295,7 +329,8 @@ jobs:
 
   clippy:
     name: ${{ inputs.image-name || 'rust' }} / clippy
-    if: ${{ inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github') }}
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
@@ -340,7 +375,8 @@ jobs:
 
   test:
     name: ${{ inputs.image-name || 'rust' }} / test
-    if: ${{ inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github') }}
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:

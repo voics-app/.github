@@ -1,7 +1,8 @@
-# Reusable Elixir checks.
-#   quality: mix format --check-formatted, compile --warnings-as-errors,
-#            credo, sobelow (security), hex.audit
-#   test:    mix test, with optional service containers
+# Reusable Elixir checks, one job (deps and the build are set up once):
+#   mix format --check-formatted, compile --warnings-as-errors, credo, sobelow (security), hex.audit,
+#   then mix test (with optional service containers).
+# Erlang/Elixir: baked into the self-hosted runner image (scripts/runner.sh) when the versions match and the
+# cache is on; erlef/setup-beam otherwise (GitHub-hosted runners, cold runs, other versions).
 # The project must depend on :credo and (when `sobelow` is true) :sobelow in
 # the :dev/:test environments.
 name: elixir
@@ -50,7 +51,7 @@ on:
         type: string
         default: ""
       services:
-        description: "JSON object of service containers for the test job (same shape as `jobs.<id>.services`)."
+        description: "JSON object of service containers for the checks job (same shape as `jobs.<id>.services`)."
         required: false
         type: string
         default: "{}"
@@ -70,7 +71,7 @@ on:
         type: string
         default: ""
       hex-audit-blocking:
-        description: "Fail the quality job when `mix hex.audit` reports retired packages or advisories. When false the finding is reported as a warning."
+        description: "Fail the checks job when `mix hex.audit` reports retired packages or advisories. When false the finding is reported as a warning."
         required: false
         type: boolean
         default: false
@@ -86,119 +87,44 @@ on:
 
 permissions:
   contents: read
+  actions: read   # tag builds look up the main run of the same commit (verified job)
 
 jobs:
-  quality:
-    name: ${{ inputs.image-name || 'elixir' }} / quality
+  # Tag builds: a vX.Y.Z tag points at the merge commit that main's CI already built and tested in full (clean,
+  # ADR-0022). When that run is green, the checks are not repeated (the image job still builds and publishes the
+  # version). No green main run for this commit (or the lookup fails) -> the checks run as usual.
+  verified:
+    name: ${{ inputs.image-name || 'elixir' }} / already verified on main
+    if: github.ref_type == 'tag'
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
-    env:
-      MIX_ENV: test
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      done: ${{ steps.lookup.outputs.done }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: CI cache policy
+      - id: lookup
         env:
-          RUNNER_ENVIRONMENT: ${{ runner.environment }}
-          CI_CACHE: ${{ vars.CI_CACHE }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
-          set -euo pipefail
-          on=true; why="persistent cache on"
-          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
-          elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
-          elif [[ "${CI_CACHE,,}" == off ]]; then on=false; why="CI_CACHE=off"
-          elif jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then on=false; why="PR label ci-no-cache"
-          elif [[ "$EVENT" == schedule ]]; then on=false; why="scheduled cold build"
-          fi
-          # deps/_build are only restored on pull requests and develop pushes; releases compile from scratch (ADR-0022).
-          reuse=false
-          if [[ "$on" == true ]]; then
-            if [[ "$EVENT" == pull_request* && "$BASE_REF" != main && ! "$HEAD_REF" =~ ^(release|hotfix)/ ]]; then reuse=true
-            elif [[ "$EVENT" == push && "$REF" == refs/heads/develop ]]; then reuse=true; fi
-          fi
-          { echo "CI_CACHE_ON=$on"; echo "CI_REUSE_BUILD=$reuse"; if [[ "$on" == true ]]; then echo "HEX_HOME=/cache/hex"; fi; } >> "$GITHUB_ENV"
-          echo "CI cache: on=$on reuse-build=$reuse ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Prepare environment
-        env:
-          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
-          EXTRA_ENV: ${{ inputs.env }}
-          DEPS_TOKEN: ${{ secrets.private-deps-token }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$SYSTEM_PACKAGES" ]]; then
-            SUDO=""; if command -v sudo >/dev/null && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
-            $SUDO apt-get update -qq
-            read -ra packages <<< "$SYSTEM_PACKAGES"
-            $SUDO apt-get install -y -qq --no-install-recommends "${packages[@]}"
-          fi
-          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
-          if [[ -n "$DEPS_TOKEN" ]]; then
-            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
-          fi
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
-        with:
-          elixir-version: ${{ inputs.elixir-version }}
-          otp-version: ${{ inputs.otp-version }}
-      # Self-hosted: deps/_build come from a per-job copy of the snapshot on the /cache volume (never shared live
-      # between concurrent jobs); the Actions cache is for GitHub-hosted runners only.
-      - name: Restore deps and _build snapshot
-        if: env.CI_REUSE_BUILD == 'true'
-        env:
-          WORKDIR: ${{ inputs.working-directory }}
-          VERSIONS: ${{ inputs.otp-version }}-${{ inputs.elixir-version }}
-        run: |
-          set -euo pipefail
-          key="$( { echo "$VERSIONS"; uname -m; sha256sum mix.lock 2>/dev/null; } | sha256sum | cut -c1-16)"
-          echo "MIX_SNAPSHOT=/cache/mixcache/${GITHUB_REPOSITORY#*/}/$key" >> "$GITHUB_ENV"
-          snap="/cache/mixcache/${GITHUB_REPOSITORY#*/}/$key"
-          if [[ -d "$snap" ]]; then cp -a "$snap/." .; echo "restored snapshot $key"; else echo "no snapshot for $key (cold)"; fi
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: runner.environment == 'github-hosted'
-        with:
-          path: |
-            ${{ inputs.working-directory }}/deps
-            ${{ inputs.working-directory }}/_build
-          key: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-${{ hashFiles(format('{0}/mix.lock', inputs.working-directory)) }}
-          restore-keys: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-
-      - run: mix deps.get
-      - run: mix format --check-formatted
-      - run: mix compile --warnings-as-errors
-      - name: mix credo
-        env:
-          CREDO_ARGS: ${{ inputs.credo-args }}
-        run: |
-          read -ra args <<< "$CREDO_ARGS"
-          mix credo "${args[@]}"
-      - name: mix sobelow
-        if: inputs.sobelow
-        env:
-          SOBELOW_ARGS: ${{ inputs.sobelow-args }}
-        run: |
-          read -ra args <<< "$SOBELOW_ARGS"
-          mix sobelow "${args[@]}"
-      - name: mix hex.audit
-        continue-on-error: ${{ !inputs.hex-audit-blocking }}
-        run: mix hex.audit
-      - name: Save deps and _build snapshot
-        if: success() && env.CI_REUSE_BUILD == 'true'
-        run: |
-          set -euo pipefail
-          if [[ ! -d "$MIX_SNAPSHOT" ]]; then
-            tmp="$MIX_SNAPSHOT.tmp.$$"; mkdir -p "$tmp"
-            cp -a deps _build "$tmp"/ && mv -T "$tmp" "$MIX_SNAPSHOT" || rm -rf "$tmp"
+          set -uo pipefail
+          wf="${WORKFLOW_REF%@*}"; wf="${wf##*/}"
+          run="$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&branch=main&event=push&status=success&per_page=1" -q '.workflow_runs[0].html_url // empty' 2>/dev/null || true)"
+          if [[ -n "$run" ]]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+            echo "### Checks skipped: commit $SHA already passed in full on main ($run)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+            echo "No green main run for $SHA: running the checks"
           fi
 
-  test:
-    name: ${{ inputs.image-name || 'elixir' }} / test
+  checks:
+    name: ${{ inputs.image-name || 'elixir' }} / checks
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' }}
     runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     env:
@@ -254,7 +180,32 @@ jobs:
             git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
             git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
           fi
+      - name: Erlang/Elixir from the runner image
+        id: beam
+        if: runner.environment == 'self-hosted' && env.CI_CACHE_ON == 'true'
+        env:
+          OTP: ${{ inputs.otp-version }}
+          ELIXIR: ${{ inputs.elixir-version }}
+        run: |
+          set -euo pipefail
+          # A version input like "29" or "1.20" matches the baked 29.1.2 / 1.20.5; anything else uses setup-beam.
+          match() { [[ "$2" == "$1" || "$2" == "$1".* ]]; }
+          otp=""; ex=""
+          for d in /opt/beam/otp-*; do [[ -d "$d" ]] && match "$OTP" "${d##*/otp-}" && otp="$d"; done
+          if [[ -n "$otp" ]]; then
+            major="${otp##*/otp-}"; major="${major%%.*}"
+            for d in /opt/beam/elixir-*-otp-"$major"; do v="${d##*/elixir-}"; v="${v%-otp-*}"; [[ -d "$d" ]] && match "$ELIXIR" "$v" && ex="$d"; done
+          fi
+          if [[ -n "$otp" && -n "$ex" ]]; then
+            { echo "$otp/bin"; echo "$ex/bin"; } >> "$GITHUB_PATH"
+            echo "LANG=C.UTF-8" >> "$GITHUB_ENV"
+            echo "have=true" >> "$GITHUB_OUTPUT"
+            echo "using baked ${otp##*/} and ${ex##*/}"
+          else
+            echo "no baked Erlang/Elixir for otp=$OTP elixir=$ELIXIR: setup-beam installs them"
+          fi
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        if: steps.beam.outputs.have != 'true'
         with:
           elixir-version: ${{ inputs.elixir-version }}
           otp-version: ${{ inputs.otp-version }}
@@ -280,6 +231,24 @@ jobs:
           key: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-${{ hashFiles(format('{0}/mix.lock', inputs.working-directory)) }}
           restore-keys: mix-${{ runner.os }}-${{ inputs.otp-version }}-${{ inputs.elixir-version }}-
       - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - name: mix credo
+        env:
+          CREDO_ARGS: ${{ inputs.credo-args }}
+        run: |
+          read -ra args <<< "$CREDO_ARGS"
+          mix credo "${args[@]}"
+      - name: mix sobelow
+        if: inputs.sobelow
+        env:
+          SOBELOW_ARGS: ${{ inputs.sobelow-args }}
+        run: |
+          read -ra args <<< "$SOBELOW_ARGS"
+          mix sobelow "${args[@]}"
+      - name: mix hex.audit
+        continue-on-error: ${{ !inputs.hex-audit-blocking }}
+        run: mix hex.audit
       - name: mix test
         env:
           TEST_ARGS: ${{ inputs.test-args }}
