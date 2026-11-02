@@ -90,7 +90,7 @@ jobs:
   verified:
     name: ${{ inputs.image-name || 'rust' }} / already verified on main
     if: github.ref_type == 'tag'
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     permissions:
       actions: read
       contents: read
@@ -121,7 +121,7 @@ jobs:
     name: ${{ inputs.image-name || 'rust' }} / fmt + clippy + test
     needs: verified
     if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
       run:
@@ -312,7 +312,7 @@ jobs:
     name: ${{ inputs.image-name || 'rust' }} / fmt
     needs: verified
     if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -330,7 +330,7 @@ jobs:
     name: ${{ inputs.image-name || 'rust' }} / clippy
     needs: verified
     if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -376,7 +376,7 @@ jobs:
     name: ${{ inputs.image-name || 'rust' }} / test
     needs: verified
     if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
       run:
@@ -432,7 +432,7 @@ jobs:
     name: ${{ inputs.image-name || 'rust' }} / audit
     # Not on pull requests: audited on develop, main, tags and the weekly schedule.
     if: inputs.audit && github.event_name != 'pull_request'
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
