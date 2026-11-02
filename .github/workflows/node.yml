@@ -91,7 +91,6 @@ on:
 
 permissions:
   contents: read
-  actions: read   # tag builds look up the main run of the same commit (verified job)
   packages: read
 
 jobs:

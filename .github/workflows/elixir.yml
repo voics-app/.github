@@ -87,7 +87,6 @@ on:
 
 permissions:
   contents: read
-  actions: read   # tag builds look up the main run of the same commit (verified job)
 
 jobs:
   # Tag builds: a vX.Y.Z tag points at the merge commit that main's CI already built and tested in full (clean,
