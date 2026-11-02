@@ -253,11 +253,40 @@ How it works:
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
 - **Requirements:** `gh` with `admin:org` (registration tokens), Docker, and `jq`. `--host` also needs SSH access.
 
+**Windows runner on the owner PC (client installer):** `powershell -File scriptsunner-win.ps1 up` downloads and registers a native runner (label `karma-win`, not a container, so it uses the PC's Node/pnpm/Rust/MSVC toolchain) and sets the client repo variable `WINDOWS_RUNNER=karma-win`. The client `release.yml` Windows job then builds the installer on the PC instead of GitHub's `windows-latest`. `runner-win.ps1 down` removes it and releases fall back to `windows-latest`; `status` shows the state. It does not survive a reboot: run `up` again. While it is down and `WINDOWS_RUNNER` is set, client releases wait in the queue.
+
 **Split by default:** `up` and `use <label>` switch only the heavy repos (api, messages, gateway, voice, client) to self-hosted runners; the light repos (docs, website, contracts, gitops, .github, bots-sdk, admin) keep GitHub-hosted runners within the $15/month budget. Change the set with `SELF_HOSTED_REPOS="api messages" scripts/runner.sh up`. `use github` resets all repos.
 
 **Several VMs:** every machine names its runners `<label>-<machine id>-N`, so names never collide, even when two VMs have the same hostname. Give VMs the same `--label` to make one pool: `scripts/runner.sh up --label vm-pool` on each VM, and jobs go to whichever runner is free. `down` removes only that machine's runners, and switches CI back to GitHub only when no other runner with the label is online.
 
 **Resources per runner (one concurrent job):** 2 vCPU, 6–8 GB RAM, about 40 GB disk. Rust builds (api, messages, sfu, native crypto) are the heaviest; docker image builds and caches need the disk. A VM for 3 runners therefore needs about **6–8 vCPU, 16–24 GB RAM and 150 GB disk** (SSD preferred). An idle runner uses about 100 MB RAM.
+
+## CI cache
+
+On self-hosted runners the shared workflows use a persistent cache volume and the toolchains baked into the runner image instead of the GitHub Actions cache (gitops#59, [ADR 0022](https://github.com/discordy-voics/docs/blob/develop/adr/0022-ci-cache-safety-rules.md)). GitHub-hosted runners are unchanged: parallel `fmt`, `clippy`, `test` jobs and the Actions cache.
+
+| What | Where | Used |
+|---|---|---|
+| cargo home (registry, git, advisory db) | `/cache/cargo` | every run with the cache on |
+| cargo `target/` | `/cache/target/<repo>/<key>/` (key = `Cargo.lock` + `rustc -vV` + toolchain + arch + workdir + `env` input) | pull requests and develop pushes only, one job at a time per key (`flock`, a concurrent job gets a private clean dir) |
+| sccache | `/cache/sccache` | same as `target/` |
+| pnpm store, corepack | `/cache/pnpm-store`, `/cache/corepack` | every run with the cache on |
+| hex, Elixir `deps/_build` snapshot | `/cache/hex`, `/cache/mixcache/<repo>/<key>/` | hex always; snapshot like `target/` |
+| Trivy DB | `/cache/trivy` | every run with the cache on |
+| toolchains | in the image: rust (+ clippy, rustfmt), Node 22 and 24, trivy, cosign, sccache, yq | detected, the setup step is skipped |
+| testcontainers images | pre-pulled by `runner.sh up` (postgres, valkey, scylla, minio, redpanda) | always |
+
+**Self-hosted `rust.yml`** runs one job `fmt + clippy + test` (fmt first, compile once, fail fast). Release builds never reuse a persistent `target/`: pushes to `main`, tags, `release/*`, `hotfix/*` and pull requests into `main` compile from a clean workspace; `docker.yml` image builds compile inside the Dockerfile (no persistent `target/`), reuse the host builder's layer cache on self-hosted runners and use `no-cache` on a cold build; SBOM and cosign only run on main, tags and release versions.
+
+**Switch it off (clean from-scratch build, like GitHub-hosted):**
+
+- everywhere: set the repository or organization variable `CI_CACHE` to `off` (`gh variable set CI_CACHE --body off -R discordy-voics/<repo>`; delete it or set `on` to switch back on);
+- one pull request: add the label `ci-no-cache`, then push a commit (a re-run keeps the old label list);
+- automatically: every `schedule` run (weekly, `develop`) is cold, so a cache that hides a breakage is found within a week.
+
+**Clear it:** `scripts/runner.sh cache-clear [--host user@vm] [--label L] [--what all|cargo|target|sccache|pnpm|trivy|mix] [--layers] [--force]`. It refuses while a runner of that label is busy (unless `--force`); `--layers` also prunes the host's Docker build cache. `runner.sh status` prints the volume size. The workflows themselves prune target dirs idle for 7 days and keep the 2 newest per repo.
+
+**Rebuild the runners (new toolchain versions):** `scripts/runner.sh up --host user@vm --count 2` rebuilds the image and recreates the containers (do it when the runners are idle: `gh api orgs/discordy-voics/actions/runners -q '.runners[]|[.name,.busy]|@tsv'`), then `SELF_HOSTED_REPOS="..." scripts/runner.sh use <label>`. Versions are set at the top of `runner.sh` (`RUST_TOOLCHAINS`, `NODE_MAJORS`, `SCCACHE_VERSION`, `COSIGN_VERSION`); a workflow that asks for a toolchain that is not in the image just installs it.
 
 ## Local development
 

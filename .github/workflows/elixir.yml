@@ -100,6 +100,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: CI cache policy
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_CACHE: ${{ vars.CI_CACHE }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          on=true; why="persistent cache on"
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
+          elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
+          elif [[ "${CI_CACHE,,}" == off ]]; then on=false; why="CI_CACHE=off"
+          elif jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then on=false; why="PR label ci-no-cache"
+          elif [[ "$EVENT" == schedule ]]; then on=false; why="scheduled cold build"
+          fi
+          # deps/_build are only restored on pull requests and develop pushes; releases compile from scratch (ADR-0022).
+          reuse=false
+          if [[ "$on" == true ]]; then
+            if [[ "$EVENT" == pull_request* && "$BASE_REF" != main && ! "$HEAD_REF" =~ ^(release|hotfix)/ ]]; then reuse=true
+            elif [[ "$EVENT" == push && "$REF" == refs/heads/develop ]]; then reuse=true; fi
+          fi
+          { echo "CI_CACHE_ON=$on"; echo "CI_REUSE_BUILD=$reuse"; if [[ "$on" == true ]]; then echo "HEX_HOME=/cache/hex"; fi; } >> "$GITHUB_ENV"
+          echo "CI cache: on=$on reuse-build=$reuse ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Prepare environment
         env:
           SYSTEM_PACKAGES: ${{ inputs.system-packages }}
@@ -122,7 +148,21 @@ jobs:
         with:
           elixir-version: ${{ inputs.elixir-version }}
           otp-version: ${{ inputs.otp-version }}
+      # Self-hosted: deps/_build come from a per-job copy of the snapshot on the /cache volume (never shared live
+      # between concurrent jobs); the Actions cache is for GitHub-hosted runners only.
+      - name: Restore deps and _build snapshot
+        if: env.CI_REUSE_BUILD == 'true'
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+          VERSIONS: ${{ inputs.otp-version }}-${{ inputs.elixir-version }}
+        run: |
+          set -euo pipefail
+          key="$( { echo "$VERSIONS"; uname -m; sha256sum mix.lock 2>/dev/null; } | sha256sum | cut -c1-16)"
+          echo "MIX_SNAPSHOT=/cache/mixcache/${GITHUB_REPOSITORY#*/}/$key" >> "$GITHUB_ENV"
+          snap="/cache/mixcache/${GITHUB_REPOSITORY#*/}/$key"
+          if [[ -d "$snap" ]]; then cp -a "$snap/." .; echo "restored snapshot $key"; else echo "no snapshot for $key (cold)"; fi
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
         with:
           path: |
             ${{ inputs.working-directory }}/deps
@@ -148,6 +188,14 @@ jobs:
       - name: mix hex.audit
         continue-on-error: ${{ !inputs.hex-audit-blocking }}
         run: mix hex.audit
+      - name: Save deps and _build snapshot
+        if: success() && env.CI_REUSE_BUILD == 'true'
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$MIX_SNAPSHOT" ]]; then
+            tmp="$MIX_SNAPSHOT.tmp.$$"; mkdir -p "$tmp"
+            cp -a deps _build "$tmp"/ && mv -T "$tmp" "$MIX_SNAPSHOT" || rm -rf "$tmp"
+          fi
 
   test:
     name: ${{ inputs.image-name || 'elixir' }} / test
@@ -162,6 +210,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: CI cache policy
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_CACHE: ${{ vars.CI_CACHE }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          on=true; why="persistent cache on"
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
+          elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
+          elif [[ "${CI_CACHE,,}" == off ]]; then on=false; why="CI_CACHE=off"
+          elif jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then on=false; why="PR label ci-no-cache"
+          elif [[ "$EVENT" == schedule ]]; then on=false; why="scheduled cold build"
+          fi
+          # deps/_build are only restored on pull requests and develop pushes; releases compile from scratch (ADR-0022).
+          reuse=false
+          if [[ "$on" == true ]]; then
+            if [[ "$EVENT" == pull_request* && "$BASE_REF" != main && ! "$HEAD_REF" =~ ^(release|hotfix)/ ]]; then reuse=true
+            elif [[ "$EVENT" == push && "$REF" == refs/heads/develop ]]; then reuse=true; fi
+          fi
+          { echo "CI_CACHE_ON=$on"; echo "CI_REUSE_BUILD=$reuse"; if [[ "$on" == true ]]; then echo "HEX_HOME=/cache/hex"; fi; } >> "$GITHUB_ENV"
+          echo "CI cache: on=$on reuse-build=$reuse ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Prepare environment
         env:
           SYSTEM_PACKAGES: ${{ inputs.system-packages }}
@@ -184,7 +258,21 @@ jobs:
         with:
           elixir-version: ${{ inputs.elixir-version }}
           otp-version: ${{ inputs.otp-version }}
+      # Self-hosted: deps/_build come from a per-job copy of the snapshot on the /cache volume (never shared live
+      # between concurrent jobs); the Actions cache is for GitHub-hosted runners only.
+      - name: Restore deps and _build snapshot
+        if: env.CI_REUSE_BUILD == 'true'
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+          VERSIONS: ${{ inputs.otp-version }}-${{ inputs.elixir-version }}
+        run: |
+          set -euo pipefail
+          key="$( { echo "$VERSIONS"; uname -m; sha256sum mix.lock 2>/dev/null; } | sha256sum | cut -c1-16)"
+          echo "MIX_SNAPSHOT=/cache/mixcache/${GITHUB_REPOSITORY#*/}/$key" >> "$GITHUB_ENV"
+          snap="/cache/mixcache/${GITHUB_REPOSITORY#*/}/$key"
+          if [[ -d "$snap" ]]; then cp -a "$snap/." .; echo "restored snapshot $key"; else echo "no snapshot for $key (cold)"; fi
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
         with:
           path: |
             ${{ inputs.working-directory }}/deps
@@ -198,6 +286,14 @@ jobs:
         run: |
           read -ra args <<< "$TEST_ARGS"
           mix test "${args[@]}"
+      - name: Save deps and _build snapshot
+        if: success() && env.CI_REUSE_BUILD == 'true'
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$MIX_SNAPSHOT" ]]; then
+            tmp="$MIX_SNAPSHOT.tmp.$$"; mkdir -p "$tmp"
+            cp -a deps _build "$tmp"/ && mv -T "$tmp" "$MIX_SNAPSHOT" || rm -rf "$tmp"
+          fi
       - name: Summary
         if: inputs.description != ''
         env:

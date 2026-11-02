@@ -1,5 +1,6 @@
 # Reusable Node checks: pnpm install (frozen lockfile), lint, typecheck, test
-# and pnpm audit. Set a script input to "" to skip that step.
+# and pnpm audit. On self-hosted runners Node, corepack/pnpm and the pnpm store come from the runner image and
+# the /cache volume (CI_CACHE=off or the PR label `ci-no-cache` turns that off; see ADR-0022). Set a script input to "" to skip that step.
 # GitHub Packages (npm.pkg.github.com) is configured for the `npm-scope`
 # scope, so private @discordy-voics packages such as the contracts package
 # resolve with the job token or `private-deps-token`.
@@ -109,6 +110,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: CI cache policy
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_CACHE: ${{ vars.CI_CACHE }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          on=true; why="persistent cache on"
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then on=false; why="GitHub-hosted runner"
+          elif [[ ! -d /cache || ! -w /cache ]]; then on=false; why="no writable /cache volume"
+          elif [[ "${CI_CACHE,,}" == off ]]; then on=false; why="CI_CACHE=off"
+          elif jq -e 'index("ci-no-cache")' >/dev/null <<< "${LABELS:-[]}"; then on=false; why="PR label ci-no-cache"
+          elif [[ "$EVENT" == schedule ]]; then on=false; why="scheduled cold build"
+          fi
+          echo "CI_CACHE_ON=$on" >> "$GITHUB_ENV"
+          echo "CI cache: on=$on ($why)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Prepare environment
         id: prepare
         env:
@@ -135,18 +153,54 @@ jobs:
           else
             echo "pnpm-version=${PNPM_VERSION}" >> "$GITHUB_OUTPUT"
           fi
+      # Node (latest of the major) and corepack are baked into the self-hosted runner image; the pnpm store and
+      # corepack downloads live on the /cache volume. Skipped when CI_CACHE is off (clean install like hosted).
+      - name: Node and pnpm from the runner image
+        id: node
+        env:
+          NODE_VERSION: ${{ inputs.node-version }}
+          PNPM_VERSION: ${{ steps.prepare.outputs.pnpm-version }}
+          NPM_SCOPE: ${{ inputs.npm-scope }}
+        run: |
+          set -euo pipefail
+          if [[ "$CI_CACHE_ON" == true && "$NODE_VERSION" =~ ^[0-9]+$ && -x "/opt/node/$NODE_VERSION/bin/node" ]]; then
+            export PATH="/opt/node/$NODE_VERSION/bin:$PATH"
+            export COREPACK_HOME=/cache/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+            mkdir -p "$COREPACK_HOME" /cache/pnpm-store "$RUNNER_TEMP/corepack-bin"
+            corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+            if [[ -n "$PNPM_VERSION" ]]; then corepack prepare "pnpm@$PNPM_VERSION" --activate; fi
+            # What actions/setup-node would write for registry-url + scope.
+            printf '%s\n' "//npm.pkg.github.com/:_authToken=\${NODE_AUTH_TOKEN}" "$NPM_SCOPE:registry=https://npm.pkg.github.com" "always-auth=true" > "$RUNNER_TEMP/.npmrc"
+            {
+              echo "/opt/node/$NODE_VERSION/bin"
+              echo "$RUNNER_TEMP/corepack-bin"
+            } >> "$GITHUB_PATH"
+            {
+              echo "COREPACK_HOME=/cache/corepack"
+              echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0"
+              echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc"
+              echo "npm_config_store_dir=/cache/pnpm-store"
+            } >> "$GITHUB_ENV"
+            echo "have=true" >> "$GITHUB_OUTPUT"
+            node --version
+          fi
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: steps.node.outputs.have != 'true'
         with:
           version: ${{ steps.prepare.outputs.pnpm-version }}
           package_json_file: ${{ inputs.working-directory }}/package.json
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.node.outputs.have != 'true'
         with:
           node-version: ${{ inputs.node-version }}
-          cache: pnpm
+          # The Actions cache is only for GitHub-hosted runners; a self-hosted cold build starts from nothing.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
           scope: ${{ inputs.npm-scope }}
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: |
+          if [[ "$CI_CACHE_ON" == true ]]; then pnpm install --frozen-lockfile --prefer-offline; else pnpm install --frozen-lockfile; fi
       - name: Lint
         if: inputs.lint-script != ''
         env:
