@@ -47,12 +47,3 @@ jobs:
       - if: runner.environment == 'github-hosted'
         run: python3 -m pip install --quiet "pyyaml>=6,<7"
       - run: python3 -m unittest discover -s tests -v
-
-  release-please:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [actionlint, test]
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    uses: ./.github/workflows/release-please.yml
