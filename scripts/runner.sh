@@ -28,7 +28,7 @@ export MSYS_NO_PATHCONV=1
 for d in /c/Users/*/AppData/Local/Microsoft/WinGet/Packages/jqlang.jq_*; do [[ -d "$d" ]] && PATH="$PATH:$d"; done
 command -v jq >/dev/null || { echo "jq is required"; exit 1; }
 ORG=discordy-voics
-IMAGE=ghcr.io/actions/actions-runner:2.338.0   # same runner version as the in-cluster ARC scale set
+IMAGE=ghcr.io/actions/actions-runner:2.338.2   # bump on new runner releases: a self-updated runner can have a broken externals/node24 npm (gitops#63)
 # The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
 PACKAGES="gettext-base libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 python3-yaml git curl ca-certificates xz-utils"
 # Toolchains baked into the runner image (the shared workflows detect-and-skip their setup steps for these).

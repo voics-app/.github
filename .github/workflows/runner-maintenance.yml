@@ -1,0 +1,46 @@
+name: runner-maintenance
+
+# Daily disk hygiene on the self-hosted VM runners (docs handbook 12, "Disk space"): prunes the Docker build cache,
+# old locally built images, leftover test containers and oversized pnpm stores (scripts/runner-prune.sh). Turns red
+# (and GitHub emails the owner) when the disk stays under 20 GB free after pruning. Does nothing when CI runs on
+# GitHub-hosted runners.
+on:
+  schedule:
+    - cron: "30 3 * * *" # daily 03:30 UTC, before the Monday 04:17 cold builds
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only show what would be removed
+        type: boolean
+        default: false
+      deep:
+        description: Also wipe the persistent Rust targets and sccache (next runs compile cold)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-maintenance
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    if: vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github'
+    runs-on: ${{ vars.CI_RUNNER }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prune the runner disk
+        env:
+          DRY: ${{ inputs.dry_run && '--dry-run' || '' }}
+          DEEP: ${{ inputs.deep && '--deep' || '' }}
+        run: |
+          # shellcheck disable=SC2086  # empty flags must vanish
+          bash scripts/runner-prune.sh $DRY $DEEP 2>&1 | tee "$RUNNER_TEMP/prune.log"
+          exit "${PIPESTATUS[0]}"
+      - name: Summary
+        if: always()
+        run: |
+          { echo '### Runner disk'; echo '```'; grep -E '^== (before|after)|GB free|wiping|error' "$RUNNER_TEMP/prune.log" || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
