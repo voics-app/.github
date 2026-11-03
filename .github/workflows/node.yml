@@ -94,9 +94,42 @@ permissions:
   packages: read
 
 jobs:
+  # Tag builds: a vX.Y.Z tag points at the merge commit that main's CI already built and tested in full (clean,
+  # ADR-0022). When that run is green, the checks are not repeated (the image job still builds and publishes the
+  # version). No green main run for this commit (or the lookup fails) -> the checks run as usual.
+  verified:
+    name: ${{ inputs.image-name || 'node' }} / already verified on main
+    if: github.ref_type == 'tag'
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      done: ${{ steps.lookup.outputs.done }}
+    steps:
+      - id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -uo pipefail
+          wf="${WORKFLOW_REF%@*}"; wf="${wf##*/}"
+          run="$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&branch=main&event=push&status=success&per_page=1" -q '.workflow_runs[0].html_url // empty' 2>/dev/null || true)"
+          if [[ -n "$run" ]]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+            echo "### Checks skipped: commit $SHA already passed in full on main ($run)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+            echo "No green main run for $SHA: running the checks"
+          fi
+
   checks:
     name: ${{ inputs.image-name || 'node' }} / checks
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    needs: verified
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     permissions:
       contents: read
@@ -166,7 +199,10 @@ jobs:
           if [[ "$CI_CACHE_ON" == true && "$NODE_VERSION" =~ ^[0-9]+$ && -x "/opt/node/$NODE_VERSION/bin/node" ]]; then
             export PATH="/opt/node/$NODE_VERSION/bin:$PATH"
             export COREPACK_HOME=/cache/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-            mkdir -p "$COREPACK_HOME" /cache/pnpm-store "$RUNNER_TEMP/corepack-bin"
+            # The pnpm store lives in the runner's work-dir mount, next to the checkout: on /cache (another mount in
+            # the container) pnpm cannot hardlink and copies every file (measured 15.4 s vs 2.8 s per install).
+            store="$(dirname "$RUNNER_WORKSPACE")/.pnpm-store"
+            mkdir -p "$COREPACK_HOME" "$store" "$RUNNER_TEMP/corepack-bin"
             corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
             if [[ -n "$PNPM_VERSION" ]]; then corepack prepare "pnpm@$PNPM_VERSION" --activate; fi
             # What actions/setup-node would write for registry-url + scope.
@@ -179,7 +215,7 @@ jobs:
               echo "COREPACK_HOME=/cache/corepack"
               echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0"
               echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc"
-              echo "npm_config_store_dir=/cache/pnpm-store"
+              echo "npm_config_store_dir=$store"
             } >> "$GITHUB_ENV"
             echo "have=true" >> "$GITHUB_OUTPUT"
             node --version
