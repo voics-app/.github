@@ -247,7 +247,7 @@ All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When t
 How it works:
 
 - **Switching:** the reusable workflows' `runs-on` defaults to `ubuntu-latest`, but follows the caller repository variable `CI_RUNNER` when it is set. `runner.sh use <label>` sets that variable in every repository; `use github` deletes it.
-- **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.0`, one job each. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
+- **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.2`, one job each. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
 - **Restarts:** the containers have no restart policy, so after a reboot the runners are gone. Run `up` again, or `use github`.
 - **Removing runners:** `runner.sh down [--host ...]` deregisters and removes them, and switches back to GitHub if they were active.
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.

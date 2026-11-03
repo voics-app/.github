@@ -225,8 +225,11 @@ jobs:
             echo "have=true" >> "$GITHUB_OUTPUT"
             node --version
           fi
+      # GitHub-hosted only: pnpm/action-setup installs pnpm with the runner's bundled npm. On self-hosted runners that
+      # npm breaks when the runner auto-updates itself (2.338.0 -> 2.338.2 left externals/node24/bin/npm unable to
+      # find ../lib/cli.js), so a self-hosted cold run gets pnpm through corepack of the fresh Node below instead.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        if: steps.node.outputs.have != 'true'
+        if: steps.node.outputs.have != 'true' && runner.environment != 'self-hosted'
         with:
           version: ${{ steps.prepare.outputs.pnpm-version }}
           package_json_file: ${{ inputs.working-directory }}/package.json
@@ -239,6 +242,21 @@ jobs:
           cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
           scope: ${{ inputs.npm-scope }}
+      - name: pnpm through corepack (self-hosted cold run)
+        if: steps.node.outputs.have != 'true' && runner.environment == 'self-hosted'
+        env:
+          PNPM_VERSION: ${{ steps.prepare.outputs.pnpm-version }}
+        run: |
+          set -euo pipefail
+          # Everything in $RUNNER_TEMP: a cold run must not reuse the image or the /cache volume.
+          export COREPACK_HOME="$RUNNER_TEMP/corepack" COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+          mkdir -p "$COREPACK_HOME" "$RUNNER_TEMP/corepack-bin"
+          command -v corepack >/dev/null || npm install -g corepack   # Node 25+ no longer bundles corepack
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          if [[ -n "$PNPM_VERSION" ]]; then corepack prepare "pnpm@$PNPM_VERSION" --activate; fi
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          { echo "COREPACK_HOME=$COREPACK_HOME"; echo "COREPACK_ENABLE_DOWNLOAD_PROMPT=0"; echo "npm_config_store_dir=$RUNNER_TEMP/pnpm-store"; } >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/corepack-bin/pnpm" --version
       - name: Install dependencies
         run: |
           if [[ "$CI_CACHE_ON" == true ]]; then pnpm install --frozen-lockfile --prefer-offline; else pnpm install --frozen-lockfile; fi
