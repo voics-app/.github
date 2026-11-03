@@ -125,7 +125,7 @@ jobs:
     name: image (${{ inputs.image-name }})
     # Build, Trivy, SBOM and signing are heavy: develop, main, release/hotfix branches and tags only.
     if: github.event_name != 'pull_request'
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     permissions:
       contents: read
       packages: write
@@ -393,7 +393,9 @@ jobs:
           push: true
           cache-from: ${{ steps.meta.outputs.cache-from }}
           cache-to: ${{ steps.meta.outputs.cache-to }}
-          no-cache: ${{ env.CI_DOCKER_CLEAN == 'true' }}
+          # Never no-cache here: on a clean (cold) run the scan build above already built every layer from scratch
+          # in this job, and this build reuses exactly those layers instead of compiling everything a second time.
+          no-cache: false
 
       - name: Generate SBOM (syft)
         if: env.CI_ATTEST == 'true'
