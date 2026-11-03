@@ -82,6 +82,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # Debug info as line tables only (backtraces keep file:line): measured on api `cargo test --no-run`, 4 jobs,
+  # 106 s -> 63 s and target/ 13 GB -> 4.2 GB. Release builds (Docker images) are not affected.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   # Tag builds: a vX.Y.Z tag points at the merge commit that main's CI already built and tested in full (clean,
