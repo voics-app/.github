@@ -28,8 +28,11 @@ git fetch -q origin
 # and waiting on that SHA never finds a main run (website 0.3.1 stalled on this).
 sha=$(gh pr view "$n" -R "discordy-voics/$r" --json mergeCommit -q .mergeCommit.oid)
 for _ in $(seq 1 10); do git fetch -q origin; [ "$(git rev-parse origin/main)" = "$sha" ] && break; sleep 6; done
+# Every push workflow on the merge commit must pass, whatever it is called (api/client "ci", docs "docs", ...).
+ALL_GREEN='[.workflow_runs[]] as $w | if ($w|length)==0 then "" elif any($w[]; .status!="completed") then "running"
+  elif all($w[]; .conclusion=="success" or .conclusion=="skipped") then "completed success" else "completed failure" end'
 for i in $(seq 1 120); do
-  s=$(gh api "repos/discordy-voics/$r/actions/runs?head_sha=$sha&branch=main&event=push" -q '[.workflow_runs[]|select(.name=="ci")][0]|"\(.status) \(.conclusion)"' 2>/dev/null)
+  s=$(gh api "repos/discordy-voics/$r/actions/runs?head_sha=$sha&branch=main&event=push" -q "$ALL_GREEN" 2>/dev/null)
   case "$s" in "completed success") echo "$r: main CI green on ${sha:0:7}"; break;; completed*) echo "$r: main CI $s on ${sha:0:7}, not tagging"; exit 1;; esac
   sleep 60
 done
