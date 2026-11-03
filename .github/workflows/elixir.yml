@@ -111,7 +111,12 @@ jobs:
         run: |
           set -uo pipefail
           wf="${WORKFLOW_REF%@*}"; wf="${wf##*/}"
-          run="$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&branch=main&event=push&status=success&per_page=1" -q '.workflow_runs[0].html_url // empty' 2>/dev/null || true)"
+          # curl + jq (both on the self-hosted image and GitHub-hosted runners; gh is not in the runner image).
+          url="${GITHUB_API_URL:-https://api.github.com}/repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&branch=main&event=push&status=success&per_page=1"
+          code="$(curl -sS -o "$RUNNER_TEMP/main-runs.json" -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$url" || echo 000)"
+          run=""
+          if [[ "$code" == 200 ]]; then run="$(jq -r '.workflow_runs[0].html_url // empty' "$RUNNER_TEMP/main-runs.json" 2>/dev/null || true)"
+          else echo "::warning::lookup of the main run failed (HTTP $code): running the checks"; fi
           if [[ -n "$run" ]]; then
             echo "done=true" >> "$GITHUB_OUTPUT"
             echo "### Checks skipped: commit $SHA already passed in full on main ($run)" | tee -a "$GITHUB_STEP_SUMMARY"
