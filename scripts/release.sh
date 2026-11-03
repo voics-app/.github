@@ -30,6 +30,8 @@ for i in $(seq 1 120); do
   case "$s" in "completed success") echo "$r: main CI green on ${sha:0:7}"; break;; completed*) echo "$r: main CI $s on ${sha:0:7}, not tagging"; exit 1;; esac
   sleep 60
 done
+# No green main run within the wait (or the repo has no CI on main): never tag unverified.
+[[ "$s" == "completed success" ]] || { echo "$r: no green main CI run for ${sha:0:7} (last: '${s:-none}'), not tagging"; exit 1; }
 W=$(mktemp -d); git worktree add -q --detach "$W" origin/main
 ( cd "$W" && git tag -a "v$v" origin/main -m "v$v" && git push -q origin "v$v" \
   && git checkout -q --detach origin/develop && git merge -q --no-edit origin/main && git push -q origin HEAD:develop ) \
