@@ -36,7 +36,16 @@ done
 # No green main run within the wait (or the repo has no CI on main): never tag unverified.
 [[ "$s" == "completed success" ]] || { echo "$r: no green main CI run for ${sha:0:7} (last: '${s:-none}'), not tagging"; exit 1; }
 W=$(mktemp -d); git worktree add -q --detach "$W" origin/main
-( cd "$W" && git tag -a "v$v" origin/main -m "v$v" && git push -q origin "v$v" \
+# client's release workflow tags the version itself (client#195): reuse that tag when it is on this commit.
+tag_v() {
+  if git ls-remote --exit-code -q origin "refs/tags/v$v" >/dev/null; then
+    git fetch -q origin "+refs/tags/v$v:refs/tags/v$v" && [ "$(git rev-parse "v$v^{commit}")" = "$sha" ] \
+      && echo "$r: v$v already tagged by CI"
+  else
+    git tag -a "v$v" origin/main -m "v$v" && git push -q origin "v$v"
+  fi
+}
+( cd "$W" && tag_v \
   && git checkout -q --detach origin/develop && git merge -q --no-edit origin/main && git push -q origin HEAD:develop ) \
   && echo "$r: v$v tagged + back-merged" || echo "$r: tag/back-merge failed"
 git worktree remove --force "$W"; git push -q origin --delete "release/$v" 2>/dev/null; true
