@@ -247,13 +247,14 @@ All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When t
 How it works:
 
 - **Switching:** the reusable workflows' `runs-on` defaults to `ubuntu-latest`, but follows the caller repository variable `CI_RUNNER` when it is set. `runner.sh use <label>` sets that variable in every repository; `use github` deletes it.
-- **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.0`, one job each. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
+- **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.2`, one job each. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
 - **Restarts:** the containers have no restart policy, so after a reboot the runners are gone. Run `up` again, or `use github`.
 - **Removing runners:** `runner.sh down [--host ...]` deregisters and removes them, and switches back to GitHub if they were active.
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
 - **Requirements:** `gh` with `admin:org` (registration tokens), Docker, and `jq`. `--host` also needs SSH access.
 
-**Windows runner on the owner PC (client installer):** `powershell -File scriptsunner-win.ps1 up` downloads and registers a native runner (label `karma-win`, not a container, so it uses the PC's Node/pnpm/Rust/MSVC toolchain) and sets the client repo variable `WINDOWS_RUNNER=karma-win`. The client `release.yml` Windows job then builds the installer on the PC instead of GitHub's `windows-latest`. `runner-win.ps1 down` removes it and releases fall back to `windows-latest`; `status` shows the state. It does not survive a reboot: run `up` again. While it is down and `WINDOWS_RUNNER` is set, client releases wait in the queue.
+**Windows runner on the owner PC (client installer):** `powershell -File scripts
+unner-win.ps1 up` downloads and registers a native runner (label `karma-win`, not a container, so it uses the PC's Node/pnpm/Rust/MSVC toolchain) and sets the client repo variable `WINDOWS_RUNNER=karma-win`. The client `release.yml` Windows job then builds the installer on the PC instead of GitHub's `windows-latest`. `runner-win.ps1 down` removes it and releases fall back to `windows-latest`; `status` shows the state. It does not survive a reboot: run `up` again. While it is down and `WINDOWS_RUNNER` is set, client releases wait in the queue.
 
 **Split by default:** `up` and `use <label>` switch only the heavy repos (api, messages, gateway, voice, client) to self-hosted runners; the light repos (docs, website, contracts, gitops, .github, bots-sdk, admin) keep GitHub-hosted runners within the $15/month budget. Change the set with `SELF_HOSTED_REPOS="api messages" scripts/runner.sh up`. `use github` resets all repos.
 
@@ -262,6 +263,8 @@ How it works:
 **Resources per runner (one concurrent job):** 2 vCPU, 6–8 GB RAM, about 40 GB disk. Rust builds (api, messages, sfu, native crypto) are the heaviest; docker image builds and caches need the disk. A VM for 3 runners therefore needs about **6–8 vCPU, 16–24 GB RAM and 150 GB disk** (SSD preferred). An idle runner uses about 100 MB RAM.
 
 ## CI cache
+
+> Full takeover guide (preinstalled tools, every cache and its key, on/off switches with risks, the "when you change X" checklist, quirks): [docs handbook 12, CI runners and caching](https://github.com/discordy-voics/docs/blob/develop/handbook/12-ci-runners-and-caching.md).
 
 On self-hosted runners the shared workflows use a persistent cache volume and the toolchains baked into the runner image instead of the GitHub Actions cache (gitops#59, [ADR 0022](https://github.com/discordy-voics/docs/blob/develop/adr/0022-ci-cache-safety-rules.md)). GitHub-hosted runners are unchanged: parallel `fmt`, `clippy`, `test` jobs and the Actions cache.
 
