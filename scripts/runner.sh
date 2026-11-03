@@ -234,17 +234,18 @@ DOCKERFILE
     busy="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$PREFIX-\")) | select(.busy==true)] | length")"
     if [[ "$busy" -gt 0 && "$FORCE" -ne 1 ]]; then echo "$busy runner(s) of $LABEL are busy; retry when idle (or --force)"; exit 1; fi
     case "$WHAT" in
-      all) paths='/cache/* /cache/.[!.]*' ;;
+      all) paths='/cache/* /cache/.[!.]* /srv/discordy-runner/*/_work/.pnpm-store' ;;
       cargo) paths='/cache/cargo' ;;
       target) paths='/cache/target' ;;
       sccache) paths='/cache/sccache' ;;
-      pnpm) paths='/cache/pnpm-store /cache/corepack' ;;
+      # The pnpm store lives in each runner's work dir (same filesystem as the checkout, so installs hardlink).
+      pnpm) paths='/cache/pnpm-store /cache/corepack /srv/discordy-runner/*/_work/.pnpm-store' ;;
       trivy) paths='/cache/trivy' ;;
       mix) paths='/cache/mix /cache/hex /cache/mixcache' ;;
       *) echo "--what must be all|cargo|target|sccache|pnpm|trivy|mix"; exit 2 ;;
     esac
     echo "Clearing $WHAT in volume $CACHE_VOLUME"
-    docker run --rm -v "$CACHE_VOLUME:/cache" alpine sh -c "rm -rf $paths; du -sh /cache"
+    docker run --rm -v "$CACHE_VOLUME:/cache" -v /srv/discordy-runner:/srv/discordy-runner alpine sh -c "rm -rf $paths; du -sh /cache"
     if [[ "$LAYERS" -eq 1 ]]; then echo "Pruning the Docker build (layer) cache"; docker builder prune -af | tail -1; fi
     ;;
   *) echo "usage: $0 up|down|use|status|cache-clear [--host user@vm] [--count N] [--label L] [--what X] [--layers] [--force]"; exit 2 ;;
