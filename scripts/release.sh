@@ -24,12 +24,17 @@ gh pr merge "$n" -R "discordy-voics/$r" --merge >/dev/null || { echo "$r: merge 
 git fetch -q origin
 # Tag only after main's CI passed on this exact commit: never tag a red main, and the tag build then skips
 # re-running the checks (shared workflows' "verified" job) and only builds/publishes the version image.
-sha=$(git rev-parse origin/main)
+# The merge commit from GitHub, not origin/main: a fetch right after the merge can still see the old main,
+# and waiting on that SHA never finds a main run (website 0.3.1 stalled on this).
+sha=$(gh pr view "$n" -R "discordy-voics/$r" --json mergeCommit -q .mergeCommit.oid)
+for _ in $(seq 1 10); do git fetch -q origin; [ "$(git rev-parse origin/main)" = "$sha" ] && break; sleep 6; done
 for i in $(seq 1 120); do
   s=$(gh api "repos/discordy-voics/$r/actions/runs?head_sha=$sha&branch=main&event=push" -q '[.workflow_runs[]|select(.name=="ci")][0]|"\(.status) \(.conclusion)"' 2>/dev/null)
   case "$s" in "completed success") echo "$r: main CI green on ${sha:0:7}"; break;; completed*) echo "$r: main CI $s on ${sha:0:7}, not tagging"; exit 1;; esac
   sleep 60
 done
+# No green main run within the wait (or the repo has no CI on main): never tag unverified.
+[[ "$s" == "completed success" ]] || { echo "$r: no green main CI run for ${sha:0:7} (last: '${s:-none}'), not tagging"; exit 1; }
 W=$(mktemp -d); git worktree add -q --detach "$W" origin/main
 ( cd "$W" && git tag -a "v$v" origin/main -m "v$v" && git push -q origin "v$v" \
   && git checkout -q --detach origin/develop && git merge -q --no-edit origin/main && git push -q origin HEAD:develop ) \
