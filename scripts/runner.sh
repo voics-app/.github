@@ -3,7 +3,8 @@
 # GitHub-hosted ubuntu-latest stays the default; self-hosted runners are opt-in per repo variable CI_RUNNER,
 # which the shared workflows' default runs-on follows (see README "CI runners").
 #
-#   scripts/runner.sh up     [--host user@vm] [--count N] [--label L]   start N runner containers (default 3)
+#   scripts/runner.sh up     [--host user@vm] [--count N] [--label L] [--recreate]
+#                            ensure N runner containers (default 3); running ones are kept unless --recreate
 #   scripts/runner.sh down   [--host user@vm] [--label L]               deregister and remove them
 #   scripts/runner.sh use    github | <label>                           switch every repo's CI_RUNNER
 #   scripts/runner.sh status [--host user@vm] [--label L]
@@ -51,7 +52,7 @@ REPOS=(api messages gateway voice admin client website gitops docs contracts .gi
 read -ra SELF_HOSTED <<< "${SELF_HOSTED_REPOS:-api messages gateway voice client}"
 
 cmd="${1:-status}"; shift || true
-HOST=""; COUNT=3; LABEL=""; WHAT=all; LAYERS=0; FORCE=0
+HOST=""; COUNT=3; LABEL=""; WHAT=all; LAYERS=0; FORCE=0; RECREATE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
@@ -60,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --what) WHAT="$2"; shift 2 ;;
     --layers) LAYERS=1; shift ;;
     --force) FORCE=1; shift ;;
+    --recreate) RECREATE=1; shift ;;
     *) TARGET="$1"; shift ;;
   esac
 done
@@ -171,6 +173,12 @@ DOCKERFILE
     for img in $PREPULL_IMAGES; do docker pull -q "$img" >/dev/null 2>&1 && echo "    $img" || echo "    $img: pull failed (skipped)"; done
     for i in $(seq 1 "$COUNT"); do
       c="$CONTAINER-$i"; n="$PREFIX-$i"
+      # Keep runners that are already running (they may be mid-job): `up --count N` then only adds the missing
+      # ones. --recreate replaces them all, e.g. after a new runner image.
+      if [[ "$RECREATE" == 0 ]] && docker ps --format '{{.Names}}' | grep -qx "$c"; then
+        echo "  [$i/$COUNT] $c already running (kept; --recreate replaces it)"
+        continue
+      fi
       echo "  [$i/$COUNT] starting container $c"
       docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
