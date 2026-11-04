@@ -19,8 +19,8 @@ for i in $(seq 1 120); do
   o=$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '"\(.statusCheckRollup|length) \([.statusCheckRollup[]|select(.status!="COMPLETED")]|length) \([.statusCheckRollup[]|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT")|.name]|join(";"))"')
   set -- $o
   [ -n "${3:-}" ] && { echo "$r: PR #$n FAILING: $3"; exit 1; }
-  # A cancelled run (superseded or cancelled by hand) is not a verdict: wait for its re-run instead.
-  [ "$1" -gt 0 ] && [ "$2" = 0 ] && [ -z "$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '[.statusCheckRollup[]|select(.conclusion=="CANCELLED")]|.[0].name // empty')" ] && { pr_green=1; break; }
+  # A cancelled run (superseded or cancelled by hand) is not a verdict: wait until that check has a green re-run.
+  [ "$1" -gt 0 ] && [ "$2" = 0 ] && [ -z "$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '[.statusCheckRollup[]] as $c | [$c[]|select(.conclusion=="CANCELLED")|.name|select(. as $n|[$c[]|select(.name==$n and (.conclusion=="SUCCESS" or .conclusion=="SKIPPED"))]|length==0)]|.[0] // empty')" ] && { pr_green=1; break; }
   sleep 60
 done
 [ "${pr_green:-0}" = 1 ] || { echo "$r: PR #$n not green within the wait, not merging"; exit 1; }
