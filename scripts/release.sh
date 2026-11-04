@@ -9,17 +9,21 @@ r=$1; v=$2; base="${BASE:-$(pwd)}"
 cd "$base/$r" && git fetch -q origin --tags || { echo "$r: fetch failed"; exit 1; }
 git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "$r: tag v$v already exists"; exit 1; }
 git push -q origin "origin/develop:refs/heads/release/$v" || { echo "$r: push release/$v failed"; exit 1; }
-n=$(gh pr create -R "discordy-voics/$r" -B main -H "release/$v" -t "release: $r $v" -b "Release $v (develop -> main).
+# Resumable: reuse an open release PR (e.g. after a stopped run) instead of failing on "already exists".
+n=$(gh pr list -R "discordy-voics/$r" -H "release/$v" -B main --state open --json number -q '.[0].number')
+[ -n "$n" ] || n=$(gh pr create -R "discordy-voics/$r" -B main -H "release/$v" -t "release: $r $v" -b "Release $v (develop -> main).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" | grep -o '[0-9]*$') || { echo "$r: PR create failed"; exit 1; }
 echo "$r: release PR #$n"
 for i in $(seq 1 120); do
-  o=$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '"\(.statusCheckRollup|length) \([.statusCheckRollup[]|select(.status!="COMPLETED")]|length) \([.statusCheckRollup[]|select(.conclusion=="FAILURE" or .conclusion=="CANCELLED" or .conclusion=="TIMED_OUT")|.name]|join(";"))"')
+  o=$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '"\(.statusCheckRollup|length) \([.statusCheckRollup[]|select(.status!="COMPLETED")]|length) \([.statusCheckRollup[]|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT")|.name]|join(";"))"')
   set -- $o
   [ -n "${3:-}" ] && { echo "$r: PR #$n FAILING: $3"; exit 1; }
-  [ "$1" -gt 0 ] && [ "$2" = 0 ] && break
+  # A cancelled run (superseded or cancelled by hand) is not a verdict: wait for its re-run instead.
+  [ "$1" -gt 0 ] && [ "$2" = 0 ] && [ -z "$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '[.statusCheckRollup[]|select(.conclusion=="CANCELLED")]|.[0].name // empty')" ] && { pr_green=1; break; }
   sleep 60
 done
+[ "${pr_green:-0}" = 1 ] || { echo "$r: PR #$n not green within the wait, not merging"; exit 1; }
 gh pr merge "$n" -R "discordy-voics/$r" --merge >/dev/null || { echo "$r: merge failed"; exit 1; }
 git fetch -q origin
 # Tag only after main's CI passed on this exact commit: never tag a red main, and the tag build then skips
