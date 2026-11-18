@@ -3,8 +3,9 @@
 # GitHub-hosted ubuntu-latest stays the default; self-hosted runners are opt-in per repo variable CI_RUNNER,
 # which the shared workflows' default runs-on follows (see README "CI runners").
 #
-#   scripts/runner.sh up     [--host user@vm] [--count N] [--label L] [--recreate]
-#                            ensure N runner containers (default 3); running ones are kept unless --recreate
+#   scripts/runner.sh up     [--host user@vm] [--count N] [--label L] [--recreate] [--dry-run]
+#                            ensure N total runners; default fits Docker CPU/RAM, capped at 3 new-default slots
+#   scripts/runner.sh preflight [--host user@vm] [--count N] [--label L]  read-only JSON plan
 #   scripts/runner.sh down   [--host user@vm] [--label L]               deregister and remove them
 #   scripts/runner.sh use    github | <label>                           switch every repo's CI_RUNNER
 #   scripts/runner.sh status [--host user@vm] [--label L]
@@ -52,7 +53,7 @@ REPOS=(api messages gateway voice admin client website gitops docs contracts .gi
 read -ra SELF_HOSTED <<< "${SELF_HOSTED_REPOS:-api messages gateway voice client}"
 
 cmd="${1:-status}"; shift || true
-HOST=""; COUNT=3; LABEL=""; WHAT=all; LAYERS=0; FORCE=0; RECREATE=0
+HOST=""; COUNT=auto; LABEL=""; WHAT=all; LAYERS=0; FORCE=0; RECREATE=0; DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
@@ -62,9 +63,17 @@ while [[ $# -gt 0 ]]; do
     --layers) LAYERS=1; shift ;;
     --force) FORCE=1; shift ;;
     --recreate) RECREATE=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --*) echo "unknown option: $1" >&2; exit 2 ;;
     *) TARGET="$1"; shift ;;
   esac
 done
+if [[ "$COUNT" != auto && ! "$COUNT" =~ ^[1-9][0-9]{0,3}$ ]]; then
+  echo '--count must be a positive integer without leading zeroes' >&2; exit 2
+fi
+if [[ "$DRY_RUN" == 1 && "$cmd" != up && "$cmd" != preflight ]]; then
+  echo '--dry-run applies only to up or preflight' >&2; exit 2
+fi
 if [[ -n "$HOST" ]]; then
   export DOCKER_HOST="ssh://$HOST"
   LABEL="${LABEL:-vm-$(echo "${HOST#*@}" | tr '.' '-')}"
@@ -75,6 +84,21 @@ else
   LABEL="${LABEL:-${PC_RUNNER_LABEL:-karma-pc}}"
 fi
 CONTAINER="discordy-runner-$LABEL"
+if [[ ! "$LABEL" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$ ]]; then
+  echo 'Invalid runner label; use 1-63 letters, digits, dots, underscores or hyphens' >&2; exit 2
+fi
+if [[ "$cmd" == up || "$cmd" == preflight ]]; then
+  # Inspect the Docker daemon, including every label/index, before builds, pulls, tokens or removals.
+  # shellcheck source=scripts/runner-capacity.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/runner-capacity.sh"
+  PLAN="$(runner_capacity_plan "$LABEL" "$COUNT" "$RECREATE")" || exit 1
+  if [[ "$DRY_RUN" == 1 || "$cmd" == preflight ]]; then printf '%s\n' "$PLAN"; exit 0; fi
+  COUNT="$(jq -r .desired <<< "$PLAN")"
+  if [[ "$(jq '.start | length' <<< "$PLAN")" == 0 ]]; then
+    echo "Existing runners satisfy count $COUNT; nothing to start. No build, removal or routing change."
+    exit 0
+  fi
+fi
 # Persistent host cache shared by all runner containers of this label (cargo registry/git, sccache, pnpm
 # store, hex/mix). A named volume survives container recreation (`down` + `up`); remove it explicitly with
 # `docker volume rm $CACHE_VOLUME` to reset caches. Mounted at /cache; see the `up` command.
@@ -86,16 +110,16 @@ if [[ -n "$HOST" ]]; then
 elif [[ -r /etc/machine-id ]]; then
   NODE="$(tr -dc 'a-z0-9' </etc/machine-id | cut -c1-6)"
 else
-  NODE="$(hostname | tr 'A-Z' 'a-z' | tr -dc 'a-z0-9' | cut -c1-6)"
+  NODE="$(hostname | tr '[:upper:]' '[:lower:]' | tr -dc 'a-z0-9' | cut -c1-6)"
 fi
 PREFIX="$LABEL-$NODE"
 # Jobs start sibling containers on the host's Docker (testcontainers) and reach them on mapped ports:
 # on a Linux VM the runner shares the host network, so "localhost" works; on Docker Desktop the
 # containers are reached through host.docker.internal.
 if [[ -n "$HOST" || "$(uname -s)" == Linux ]]; then
-  NETWORK_ARGS="--network host"
+  NETWORK_ARGS=(--network host)
 else
-  NETWORK_ARGS="--add-host host.docker.internal:host-gateway -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal"
+  NETWORK_ARGS=(--add-host host.docker.internal:host-gateway -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal)
 fi
 
 # Works on old gh versions too (gh variable get is recent); empty when the variable is not set.
@@ -171,24 +195,27 @@ DOCKERFILE
     docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || { echo "building $LOCAL_IMAGE failed"; exit 1; }
     echo "Pre-pulling testcontainers images"
     for img in $PREPULL_IMAGES; do docker pull -q "$img" >/dev/null 2>&1 && echo "    $img" || echo "    $img: pull failed (skipped)"; done
-    for i in $(seq 1 "$COUNT"); do
-      c="$CONTAINER-$i"; n="$PREFIX-$i"
-      # Keep runners that are already running (they may be mid-job): `up --count N` then only adds the missing
-      # ones. --recreate replaces them all, e.g. after a new runner image.
-      if [[ "$RECREATE" == 0 ]] && docker ps --format '{{.Names}}' | grep -qx "$c"; then
-        echo "  [$i/$COUNT] $c already running (kept; --recreate replaces it)"
-        continue
+    while :; do
+      # Image preparation can take minutes; re-read capacity/inventory before each addition.
+      PLAN="$(runner_capacity_plan "$LABEL" "$COUNT" "$RECREATE")" || exit 1
+      c="$(jq -r '.start[0] // empty' <<< "$PLAN")"
+      [[ -n "$c" ]] || break
+      i="${c##*-}"; n="$PREFIX-$i"
+      echo "  starting container $c (desired total: $COUNT)"
+      if jq -e --arg name "$c" '.recreate | index($name) != null' <<< "$PLAN" >/dev/null; then
+        # Explicit --recreate only removes a stopped container. A concurrent start makes rm fail safely.
+        docker rm "$c" >/dev/null
       fi
-      echo "  [$i/$COUNT] starting container $c"
-      docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
       # The work dir has the same path on the host and in the container: jobs talk to the host's Docker, so a
       # bind mount of $GITHUB_WORKSPACE (docker run -v "$GITHUB_WORKSPACE:/repo") must resolve on the host too.
       work="/srv/discordy-runner/$c/_work"
       docker run -d --name "$c" --user root \
         -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" -e WORK="$work" \
-        -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" -v "$CACHE_VOLUME:/cache" $NETWORK_ARGS \
+        -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" -v "$CACHE_VOLUME:/cache" "${NETWORK_ARGS[@]}" \
         "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels --work "$WORK" && unset REG_TOKEN && exec ./run.sh' >/dev/null
+      # Newly started runners must be kept on the next capacity check, including during --recreate.
+      [[ "$RECREATE" == 1 ]] && RECREATE=2
     done
     online=0
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
@@ -200,8 +227,11 @@ DOCKERFILE
       sleep 2
     done
     echo "runners online ($LABEL): $online/$COUNT"
-    [[ -z "$HOST" ]] && set_runner_var "$LABEL"   # started on this machine (PC or VM): send jobs here
-    [[ -n "$HOST" ]] && echo "send jobs here with: scripts/runner.sh use $LABEL"
+    if [[ -z "$HOST" ]]; then
+      set_runner_var "$LABEL"   # started on this machine (PC or VM): send jobs here
+    else
+      echo "send jobs here with: scripts/runner.sh use $LABEL"
+    fi
     ;;
   down)
     current="$(get_runner_var)"
@@ -212,6 +242,7 @@ DOCKERFILE
       token="$(gh api -X POST "orgs/$ORG/actions/runners/remove-token" -q .token)"
       echo "  removing $c"
       # A runner that never finished registering has nothing to remove; don't let that block down.
+      # shellcheck disable=SC2016 # T must expand inside the runner, from docker exec -e.
       timeout 30 docker exec -e T="$token" "$c" bash -c 'cd /home/runner && [ -f .runner ] && ./config.sh remove --token "$T"' >/dev/null 2>&1 || true
       docker rm -f "$c" >/dev/null
     done
@@ -256,5 +287,5 @@ DOCKERFILE
     docker run --rm -v "$CACHE_VOLUME:/cache" -v /srv/discordy-runner:/srv/discordy-runner alpine sh -c "rm -rf $paths; du -sh /cache"
     if [[ "$LAYERS" -eq 1 ]]; then echo "Pruning the Docker build (layer) cache"; docker builder prune -af | tail -1; fi
     ;;
-  *) echo "usage: $0 up|down|use|status|cache-clear [--host user@vm] [--count N] [--label L] [--what X] [--layers] [--force]"; exit 2 ;;
+  *) echo "usage: $0 up|preflight|down|use|status|cache-clear [--host user@vm] [--count N] [--label L] [--dry-run] [--what X] [--layers] [--force]"; exit 2 ;;
 esac
