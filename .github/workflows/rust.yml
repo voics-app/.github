@@ -232,6 +232,7 @@ jobs:
           target_note="clean target"
           if [[ "$CI_REUSE_TARGET" == true ]]; then
             repo="${GITHUB_REPOSITORY#*/}"
+            # shellcheck disable=SC2015 # Preserve the fallback when the lockfile is missing or unreadable.
             lockhash="$( { [[ -f Cargo.lock ]] && cat Cargo.lock || find . -name Cargo.toml -not -path './target/*' | sort | xargs cat; } | sha256sum | cut -c1-16)"
             # Key: lockfile + toolchain (rustc -vV) + arch + workdir + extra env (RUSTFLAGS etc.).
             key="$( { rustc -vV; echo "$TOOLCHAIN"; uname -m; echo "$WORKDIR"; echo "$EXTRA_ENV"; echo "$lockhash"; } | sha256sum | cut -c1-16)"
@@ -239,6 +240,7 @@ jobs:
             mkdir -p "$base"
             # Keep the volume small (the VM disk is limited): drop target dirs idle for 7 days and keep only the
             # 2 most recently used per repo. A dir still locked by a running job is never touched.
+            # shellcheck disable=SC2094 # The separate .lock file is intentionally opened while its target is pruned.
             { find "$base" -mindepth 1 -maxdepth 1 -type d -mtime +7; { ls -1dt "$base"/*/ 2>/dev/null || true; } | sed "s:/$::" | tail -n +3; } | sort -u | while IFS= read -r old; do
               [[ "$old" == "$dir" ]] && continue
               ( flock -n 8 || exit 0; rm -rf "$old" "$old.lock" ) 8>"$old.lock" || true
