@@ -265,6 +265,7 @@ jobs:
           set -euo pipefail
           if [[ ! -d "$MIX_SNAPSHOT" ]]; then
             tmp="$MIX_SNAPSHOT.tmp.$$"; mkdir -p "$tmp"
+            # shellcheck disable=SC2015 # Either copy or publish failure cleans the incomplete snapshot.
             cp -a deps _build "$tmp"/ && mv -T "$tmp" "$MIX_SNAPSHOT" || rm -rf "$tmp"
           fi
       - name: Summary

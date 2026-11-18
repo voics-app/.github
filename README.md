@@ -239,7 +239,7 @@ All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When t
 | Where jobs run | Switch with | Notes |
 |---|---|---|
 | GitHub-hosted (default) | `scripts/runner.sh use github` | Costs Actions minutes; private repos get 2 vCPU / 7 GB / 14 GB SSD |
-| Owner's PC (label `karma-pc`) | `scripts/runner.sh up` (starts 3 containers and switches) | Docker Desktop; run `scripts/runner.sh down` before shutting the PC off |
+| Owner's PC (label `karma-pc`) | `scripts/runner.sh up` (adds runners within Docker's CPU/RAM budget) | Docker Desktop; run `scripts/runner.sh down` before shutting the PC off |
 | A VM, set up **on the VM itself** (label `vm-<hostname>`) | clone this repo on the VM, `gh auth login` + `gh auth refresh -s admin:org`, then `scripts/runner-vm-bootstrap.sh` (no sudo, no argument), log out/in, `scripts/runner.sh up` | Easiest; `up` switches CI to the VM |
 | A VM, managed **from the PC** over SSH (label `vm-<ip>`) | `ssh-copy-id user@vm`, `scripts/runner-vm-bootstrap.sh user@vm`, `scripts/runner.sh up --host user@vm`, `scripts/runner.sh use vm-<ip>` | Any Ubuntu/Debian VM reachable over SSH |
 | In-cluster ARC (`discordy`) | named explicitly in a workflow | For jobs that need the cluster network |
@@ -247,7 +247,10 @@ All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When t
 How it works:
 
 - **Switching:** the reusable workflows' `runs-on` defaults to `ubuntu-latest`, but follows the caller repository variable `CI_RUNNER` when it is set. `runner.sh use <label>` sets that variable in every repository; `use github` deletes it.
-- **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.2`, one job each. Runners that are already running are kept (they may be mid-job), so `up --count 4` on a host with 3 only adds one; `--recreate` replaces them all, e.g. after a runner image change. The production runner VM (`oussama@192.168.1.219`, label `vm-runner`, 4 vCPU / 7 GB) runs 3 since 2026-11-04. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
+- **Planning first:** `runner.sh preflight [--host user@vm] [--label L] [--count N]` and `up --dry-run` print the same read-only JSON plan. They inspect the Docker daemon's CPU/RAM and every `discordy-runner-*` container across labels and indices, before image builds, pulls, registration tokens or removals. A refused plan changes nothing.
+- **Building a runner:** `up --count N` means N total active runners for this label, not container indices 1..N. Existing runner #2 satisfies a requested total of one. An unchanged pool returns before builds, pulls or routing changes; use `use <label>` explicitly to change routing. Missing slots use unused names and preserve stopped containers. Runners use `ghcr.io/actions/actions-runner:2.338.2`, one job each, with the host Docker socket and baked build tools.
+- **Capacity:** each job reserves 2 CPUs and 6 GiB RAM, with 1 GiB reserved for the host; swap does not add capacity. The default admits up to three slots within this budget, retaining a larger existing pool only when it fits. Explicit `--count` cannot exceed the remaining budget after other labels. An 8 GiB/4 CPU host admits one; a 24 GiB/6 CPU host admits three. The observed 4 CPU/7.2 GiB CI VM therefore admits one. Already excessive pools or a requested smaller count require manual draining; `up` never shrinks them.
+- **Recreation:** explicitly drain and stop the selected runners first. `up --recreate` refuses running/paused/restarting targets and removes only selected stopped containers without `--force`. A runner that starts concurrently makes removal fail instead of being killed. Capacity/inventory is checked again after image preparation and before each addition.
 - **Restarts:** the containers have no restart policy, so after a reboot the runners are gone. Run `up` again, or `use github`.
 - **Removing runners:** `runner.sh down [--host ...]` deregisters and removes them, and switches back to GitHub if they were active.
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
@@ -260,7 +263,16 @@ unner-win.ps1 up` downloads and registers a native runner (label `karma-win`, no
 
 **Several VMs:** every machine names its runners `<label>-<machine id>-N`, so names never collide, even when two VMs have the same hostname. Give VMs the same `--label` to make one pool: `scripts/runner.sh up --label vm-pool` on each VM, and jobs go to whichever runner is free. `down` removes only that machine's runners, and switches CI back to GitHub only when no other runner with the label is online.
 
-**Resources per runner (one concurrent job):** 2 vCPU, 6–8 GB RAM, about 40 GB disk. Rust builds (api, messages, sfu, native crypto) are the heaviest; docker image builds and caches need the disk. A VM for 3 runners therefore needs about **6–8 vCPU, 16–24 GB RAM and 150 GB disk** (SSD preferred). An idle runner uses about 100 MB RAM.
+**Resources per runner (one concurrent job):** budget 2 vCPU and 6 GiB RAM, plus
+the shared 1 GiB host reserve, and allow about 40 GB disk per runner. For three
+heavy jobs, plan for **6–8 vCPU, 24 GiB RAM and 150 GB SSD**. Rust linking,
+testcontainers, image builds and caches are much heavier than an idle runner.
+
+The preflight is conservative admission for a **dedicated CI host**, not a live
+pressure controller: it does not measure available RAM, free disk, swap activity
+or I/O pressure, and it cannot guarantee job performance. Inspect those before
+adding capacity. Serialize `up` commands across operators; an inventory snapshot
+is not a distributed lock. No preflight path stops containers or deletes caches.
 
 ## CI cache
 
@@ -293,7 +305,13 @@ On self-hosted runners the shared workflows use a persistent cache volume and th
 
 **Clear it:** `scripts/runner.sh cache-clear [--host user@vm] [--label L] [--what all|cargo|target|sccache|pnpm|trivy|mix] [--layers] [--force]`. It refuses while a runner of that label is busy (unless `--force`); `--layers` also prunes the host's Docker build cache. `runner.sh status` prints the volume size. The workflows themselves prune target dirs idle for 7 days and keep the 2 newest per repo. **Disk guard:** under 15 GB free on `/cache` a Rust job first drops every other idle target dir (all repos), and under 8 GB it builds with a clean target. Clean builds (releases, cold runs, low disk) compile into `$RUNNER_TEMP/target`, which the runner wipes after the job, so nothing large stays in the workspace. sccache is capped at 4 GB.
 
-**Rebuild the runners (new toolchain versions):** `scripts/runner.sh up --host user@vm --count 2` rebuilds the image and recreates the containers (do it when the runners are idle: `gh api orgs/discordy-voics/actions/runners -q '.runners[]|[.name,.busy]|@tsv'`), then `SELF_HOSTED_REPOS="..." scripts/runner.sh use <label>`. Versions are set at the top of `runner.sh` (`RUST_TOOLCHAINS`, `NODE_MAJORS`, `SCCACHE_VERSION`, `COSIGN_VERSION`); a workflow that asks for a toolchain that is not in the image just installs it.
+**Rebuild the runners (new toolchain versions):** first inspect the read-only plan,
+remove the selected runners from job routing, wait for their jobs to finish, and
+stop them explicitly. Then use `scripts/runner.sh up --host user@vm --label L --count N --recreate`
+with N inside the reported budget. Restore routing with `use <label>` after
+registration. Versions live at the top of `runner.sh`; a workflow requesting
+another toolchain installs it. Plain `up` keeps running containers and does not
+refresh their toolchains.
 
 ## Local development
 
