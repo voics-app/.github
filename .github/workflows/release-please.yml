@@ -26,7 +26,7 @@ on:
         type: string
         default: ".release-please-manifest.json"
       runs-on:
-        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`. The default (ubuntu-latest) follows the caller repo variable CI_RUNNER when set (scripts/pc-runner.sh).'
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`. The default uses CI_RUNNER when it is a self-hosted label, otherwise vm-runner.'
         required: false
         type: string
         default: "ubuntu-latest"
@@ -51,7 +51,7 @@ permissions:
 jobs:
   release-please:
     name: release-please
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-') && vars.CI_RUNNER) || 'vm-runner')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     permissions:
       contents: write
       pull-requests: write

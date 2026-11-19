@@ -20,7 +20,7 @@ jobs:
     uses: ./.github/workflows/gitflow-guard.yml
 
   actionlint:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-') && vars.CI_RUNNER) || 'vm-runner' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,7 +33,7 @@ jobs:
           ./actionlint -color
 
   test:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-') && vars.CI_RUNNER) || 'vm-runner' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,3 +47,13 @@ jobs:
       - if: runner.environment == 'github-hosted'
         run: python3 -m pip install --quiet "pyyaml>=6,<7"
       - run: python3 -m unittest discover -s tests -v
+
+  runner-capability-probe:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'hotfix/vm-runner-default-')
+    runs-on: vm-runner
+    steps:
+      - name: Check non-secret runner capabilities
+        run: |
+          if command -v gh >/dev/null 2>&1; then echo "gh=available"; else echo "gh=unavailable"; fi
+          if test -r /var/run/secrets/kubernetes.io/serviceaccount/token; then echo "cluster_serviceaccount=present"; else echo "cluster_serviceaccount=absent"; fi
+          if getent hosts minio.voics-data.svc.cluster.local >/dev/null 2>&1; then echo "cluster_dns=available"; else echo "cluster_dns=unavailable"; fi

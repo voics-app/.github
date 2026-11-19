@@ -67,7 +67,7 @@ on:
         type: string
         default: ""
       runs-on:
-        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`. The default (ubuntu-latest) follows the caller repo variable CI_RUNNER when set (scripts/pc-runner.sh).'
+        description: 'Runner label, or a JSON array of labels such as `["self-hosted","discordy"]`. The default uses CI_RUNNER when it is a self-hosted label, otherwise vm-runner.'
         required: false
         type: string
         default: "ubuntu-latest"
@@ -94,7 +94,7 @@ jobs:
   verified:
     name: ${{ inputs.image-name || 'rust' }} / already verified on main
     if: github.ref_type == 'tag'
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-') && vars.CI_RUNNER) || 'vm-runner')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     permissions:
       actions: read
       contents: read
@@ -129,8 +129,8 @@ jobs:
   check:
     name: ${{ inputs.image-name || 'rust' }} / fmt + clippy + test
     needs: verified
-    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on != 'ubuntu-latest' || (vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-') && vars.CI_RUNNER) || 'vm-runner')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     services: ${{ fromJSON(inputs.services) }}
     defaults:
       run:
@@ -317,131 +317,11 @@ jobs:
           DESCRIPTION: ${{ inputs.description }}
         run: printf '### %s\n\n%s\n' "$TITLE" "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
 
-  fmt:
-    name: ${{ inputs.image-name || 'rust' }} / fmt
-    needs: verified
-    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: ${{ inputs.toolchain }}
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    name: ${{ inputs.image-name || 'rust' }} / clippy
-    needs: verified
-    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prepare environment
-        env:
-          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
-          EXTRA_ENV: ${{ inputs.env }}
-          DEPS_TOKEN: ${{ secrets.private-deps-token }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$SYSTEM_PACKAGES" ]]; then
-            SUDO=""; if command -v sudo >/dev/null && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
-            $SUDO apt-get update -qq
-            read -ra packages <<< "$SYSTEM_PACKAGES"
-            $SUDO apt-get install -y -qq --no-install-recommends "${packages[@]}"
-          fi
-          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
-          if [[ -n "$DEPS_TOKEN" ]]; then
-            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
-            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
-          fi
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: ${{ inputs.toolchain }}
-          components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: ${{ inputs.working-directory }}
-          shared-key: clippy
-      - name: cargo clippy
-        env:
-          CLIPPY_ARGS: ${{ inputs.clippy-args }}
-        run: |
-          read -ra args <<< "$CLIPPY_ARGS"
-          cargo clippy "${args[@]}"
-
-  test:
-    name: ${{ inputs.image-name || 'rust' }} / test
-    needs: verified
-    if: ${{ !cancelled() && needs.verified.outputs.done != 'true' && (inputs.runs-on == 'ubuntu-latest' && (vars.CI_RUNNER == '' || vars.CI_RUNNER == 'github')) }}
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
-    services: ${{ fromJSON(inputs.services) }}
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prepare environment
-        env:
-          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
-          EXTRA_ENV: ${{ inputs.env }}
-          DEPS_TOKEN: ${{ secrets.private-deps-token }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$SYSTEM_PACKAGES" ]]; then
-            SUDO=""; if command -v sudo >/dev/null && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
-            $SUDO apt-get update -qq
-            read -ra packages <<< "$SYSTEM_PACKAGES"
-            $SUDO apt-get install -y -qq --no-install-recommends "${packages[@]}"
-          fi
-          jq -r 'to_entries[] | "\(.key)<<__ENV_EOF__\n\(.value)\n__ENV_EOF__"' <<< "$EXTRA_ENV" >> "$GITHUB_ENV"
-          if [[ -n "$DEPS_TOKEN" ]]; then
-            git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git config --global --add url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
-            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
-          fi
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: ${{ inputs.toolchain }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: ${{ inputs.working-directory }}
-          shared-key: test
-      - name: cargo test
-        env:
-          TEST_ARGS: ${{ inputs.test-args }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          read -ra args <<< "$TEST_ARGS"
-          # Pull requests run the fast unit tests only (the pre-push hook runs them locally too); the
-          # integration tests (testcontainers) run on develop, main, release branches and tags.
-          if [[ "$EVENT_NAME" == pull_request* ]]; then args+=(--lib --bins); fi
-          cargo test "${args[@]}"
-      - name: Summary
-        if: inputs.description != ''
-        env:
-          TITLE: ${{ inputs.image-name || github.repository }}
-          DESCRIPTION: ${{ inputs.description }}
-        run: printf '### %s\n\n%s\n' "$TITLE" "$DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"
-
   audit:
     name: ${{ inputs.image-name || 'rust' }} / audit
     # Not on pull requests: audited on develop, main, tags and the weekly schedule.
     if: inputs.audit && github.event_name != 'pull_request'
-    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != 'github' && vars.CI_RUNNER) || 'ubuntu-latest')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
+    runs-on: ${{ (inputs.runs-on == 'ubuntu-latest' && ((vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-') && vars.CI_RUNNER) || 'vm-runner')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on)) || inputs.runs-on }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

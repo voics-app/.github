@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   prune:
-    if: vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github'
+    if: vars.CI_RUNNER != '' && vars.CI_RUNNER != 'github' && !startsWith(vars.CI_RUNNER, 'ubuntu-')
     runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 30
     steps:
