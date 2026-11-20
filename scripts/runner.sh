@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Self-hosted GitHub Actions runners for discordy-voics, on the owner's PC or on any Linux VM with Docker.
-# GitHub-hosted ubuntu-latest stays the default; self-hosted runners are opt-in per repo variable CI_RUNNER,
-# which the shared workflows' default runs-on follows (see README "CI runners").
+# Linux workflows default to the existing vm-runner pool; CI_RUNNER can select another self-hosted label.
+# A stopped pool leaves jobs queued instead of falling back to GitHub-hosted runners.
 #
 #   scripts/runner.sh up     [--host user@vm] [--count N] [--label L]   start N runner containers (default 3)
 #   scripts/runner.sh down   [--host user@vm] [--label L]               deregister and remove them
-#   scripts/runner.sh use    github | <label>                           switch every repo's CI_RUNNER
+#   scripts/runner.sh use    <label>                                    switch selected repos' CI_RUNNER
 #   scripts/runner.sh status [--host user@vm] [--label L]
 #   scripts/runner.sh cache-clear [--host user@vm] [--label L] [--what all|cargo|target|sccache|pnpm|trivy|mix]
 #                                 [--layers] [--force]   wipe the persistent CI cache (README "CI cache")
@@ -46,9 +46,8 @@ ELIXIR_SHA256=f424d6f0bb710a1d4898f2645d8ad6cab3f5eab8d71848c0dda2579d3a8e8a06
 # Container images the testcontainers suites start (pulled on `up` so tests do not wait for the registry).
 PREPULL_IMAGES="postgres:16-alpine postgres:17-alpine valkey/valkey:8-alpine scylladb/scylla:2025.1 pgsty/minio:RELEASE.2026-08-04T00-00-00Z docker.redpanda.com/redpandadata/redpanda:v24.2.7 docker.redpanda.com/redpandadata/redpanda:v25.1.1"
 REPOS=(api messages gateway voice admin client website gitops docs contracts .github bots-sdk)
-# Repos whose CI runs on self-hosted runners when they are up (heavy Rust/Docker builds; free). The rest
-# stay on GitHub-hosted runners (cheap, light jobs; $15/month budget). Override with SELF_HOSTED_REPOS="...".
-read -ra SELF_HOSTED <<< "${SELF_HOSTED_REPOS:-api messages gateway voice client}"
+# By default switch every repository; SELF_HOSTED_REPOS can explicitly narrow the target set.
+read -ra SELF_HOSTED <<< "${SELF_HOSTED_REPOS:-${REPOS[*]}}"
 
 cmd="${1:-status}"; shift || true
 HOST=""; COUNT=3; LABEL=""; WHAT=all; LAYERS=0; FORCE=0
@@ -100,11 +99,9 @@ fi
 get_runner_var() { local v; v="$(gh api "repos/$ORG/api/actions/variables/CI_RUNNER" -q .value 2>/dev/null)" && printf %s "$v" || true; }
 runners_json() { gh api --paginate "orgs/$ORG/actions/runners?per_page=100" -q ".runners[]"; }
 set_runner_var() {
-  local targets=("${REPOS[@]}")
-  [[ "$1" != github ]] && targets=("${SELF_HOSTED[@]}")
+  local targets=("${SELF_HOSTED[@]}")
   for r in "${targets[@]}"; do
-    if [[ "$1" == github ]]; then gh variable delete CI_RUNNER -R "$ORG/$r" >/dev/null 2>&1 || true
-    else gh variable set CI_RUNNER -R "$ORG/$r" --body "$1" >/dev/null; fi
+    gh variable set CI_RUNNER -R "$ORG/$r" --body "$1" >/dev/null
   done
   echo "CI_RUNNER -> $1 in ${#targets[@]} repos (${targets[*]})"
 }
@@ -192,14 +189,16 @@ DOCKERFILE
       sleep 2
     done
     echo "runners online ($LABEL): $online/$COUNT"
-    [[ -z "$HOST" ]] && set_runner_var "$LABEL"   # started on this machine (PC or VM): send jobs here
+    if [[ -z "$HOST" ]]; then
+      [[ "$online" -gt 0 ]] || { echo "no runner came online; CI_RUNNER was not changed" >&2; exit 1; }
+      set_runner_var "$LABEL"
+    fi
     [[ -n "$HOST" ]] && echo "send jobs here with: scripts/runner.sh use $LABEL"
     ;;
   down)
     current="$(get_runner_var)"
     others="$(runners_json | jq -s "[.[] | select(.status==\"online\") | select(any(.labels[]; .name==\"$LABEL\")) | select(.name|startswith(\"$PREFIX-\")|not)] | length")"
-    if [[ "$current" == "$LABEL" && "$others" -eq 0 ]]; then set_runner_var github
-    elif [[ "$current" == "$LABEL" ]]; then echo "$others other runner(s) with label $LABEL still online: CI stays on $LABEL"; fi
+    if [[ "$current" == "$LABEL" ]]; then echo "CI_RUNNER stays on $LABEL; $others other runner(s) in the pool are online (jobs queue if none remain)"; fi
     for c in $(docker ps -a --format '{{.Names}}' | grep -E "^$CONTAINER(-[0-9]+)?$" || true); do
       token="$(gh api -X POST "orgs/$ORG/actions/runners/remove-token" -q .token)"
       echo "  removing $c"
@@ -213,7 +212,7 @@ DOCKERFILE
     echo "runners $LABEL removed"
     ;;
   use)
-    [[ -n "${TARGET:-}" ]] || { echo "usage: $0 use github|<label>"; exit 2; }
+    [[ -n "${TARGET:-}" && "$TARGET" != github && "$TARGET" != ubuntu-* ]] || { echo "usage: $0 use <self-hosted-label>"; exit 2; }
     if [[ "$TARGET" != github ]]; then
       n="$(runners_json | jq -s "[.[] | select(.labels[].name==\"$TARGET\") | select(.status==\"online\")] | length")"
       [[ "$n" -gt 0 ]] || { echo "no online runner has label $TARGET; start it first (scripts/runner.sh up ...)"; exit 1; }
@@ -221,7 +220,7 @@ DOCKERFILE
     set_runner_var "$TARGET"
     ;;
   status)
-    v="$(get_runner_var)"; v="${v:-<unset: GitHub-hosted ubuntu-latest>}"
+    v="$(get_runner_var)"; v="${v:-<unset: shared workflows use vm-runner>}"
     echo "CI_RUNNER (api): $v"
     echo "this machine: runners named $PREFIX-N, label $LABEL"
     docker ps --filter "name=^$CONTAINER" --format '{{.Names}}: {{.Status}}' 2>/dev/null || true
