@@ -191,7 +191,7 @@ DOCKERFILE
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
     last=-1
     for _ in $(seq 1 150); do
-      online="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$PREFIX-\")) | select(.status==\"online\")] | length")"
+      online="$(runners_json | jq -s --arg prefix "$PREFIX" --argjson count "$COUNT" '[.[] | select(.status == "online") | .name as $name | select([range(1; $count + 1) | "\($prefix)-\(.)"] | index($name) != null)] | length')"
       [[ "$online" != "$last" ]] && { echo "  online: $online/$COUNT"; last="$online"; }
       ready=0
       for i in $(seq 1 "$COUNT"); do
