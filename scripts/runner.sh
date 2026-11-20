@@ -222,7 +222,9 @@ DOCKERFILE
       timeout 30 docker exec -e T="$token" "$c" bash -c 'cd /home/runner && [ -f .runner ] && ./config.sh remove --token "$T"' >/dev/null 2>&1 || true
       docker rm -f "$c" >/dev/null
     done
-    for id in $(runners_json | jq -r "select(.name|startswith(\"$PREFIX-\")) | .id"); do
+    # Native Windows gh/jq can terminate piped records with CRLF; command substitution
+    # may remove only LF and otherwise pass an invalid control character to gh.
+    for id in $(runners_json | jq -r "select(.name|startswith(\"$PREFIX-\")) | .id" | tr -d '\r'); do
       gh api -X DELETE "orgs/$ORG/actions/runners/$id" >/dev/null || true
     done
     echo "runners $LABEL removed"
