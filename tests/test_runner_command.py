@@ -39,6 +39,13 @@ if [[ "$1" == api && "$2" == *variables/CI_RUNNER ]]; then echo vm-runner; fi
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(calls.count('variable set CI_RUNNER'), 2)
 
+    def test_up_refuses_existing_container_before_registration_or_build(self):
+        run, calls = self.run_command(['up', '--count', '1', '--label', 'fixture'])
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn('already exists', run.stderr)
+        self.assertNotIn('registration-token', calls)
+        self.assertNotIn('variable set', calls)
+
     def test_hosted_choice_and_down_never_switch_to_hosted(self):
         run, calls = self.run_command(['use', 'github'])
         self.assertNotEqual(run.returncode, 0)

@@ -248,7 +248,7 @@ How it works:
 
 - **Switching:** the reusable workflows' `runs-on` defaults to `ubuntu-latest`, but follows the caller repository variable `CI_RUNNER` when it is set. `runner.sh use <label>` sets that variable in every repository; `use github` deletes it.
 - **Building a runner:** `runner.sh up` starts `--count` (default 3) containers of `ghcr.io/actions/actions-runner:2.338.2`, one job each. They register at org level with the label, mount the host's Docker socket for image builds, and install the base packages `ubuntu-latest` ships (`libatomic1`, build tools, cmake, clang, jq).
-- **Restarts:** the containers have no restart policy, so after a reboot the runners are gone. Run `up` again, or `use github`.
+- **Restarts:** new containers use Docker `unless-stopped` and reuse their existing registration after a daemon or host restart. `up` refuses to replace an existing container; partial registrations fail closed and need operator recovery. This does not update existing containers: retire and recreate each old container deliberately when idle before it gains this behavior. Registration data lives in the container, while the CI cache is in a separate persistent volume.
 - **Removing runners:** `runner.sh down [--host ...]` deregisters and removes them, and switches back to GitHub if they were active.
 - **Checking:** `runner.sh status` shows the active `CI_RUNNER` and the online runners.
 - **Requirements:** `gh` with `admin:org` (registration tokens), Docker, and `jq`. `--host` also needs SSH access.

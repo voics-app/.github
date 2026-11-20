@@ -76,7 +76,7 @@ CONTAINER="discordy-runner-$LABEL"
 # store, hex/mix). A named volume survives container recreation (`down` + `up`); remove it explicitly with
 # `docker volume rm $CACHE_VOLUME` to reset caches. Mounted at /cache; see the `up` command.
 CACHE_VOLUME="discordy-ci-cache-$LABEL"
-# Runner NAMES must be unique across machines (registration uses --replace, and down removes by name),
+# Runner NAMES must be unique across machines (down removes by name),
 # while several machines may share one LABEL to form a pool. Names get a short id of this machine.
 if [[ -n "$HOST" ]]; then
   NODE="$(ssh "$HOST" 'cat /etc/machine-id 2>/dev/null || hostname' | tr -dc 'a-z0-9' | cut -c1-6)"
@@ -108,6 +108,15 @@ set_runner_var() {
 
 case "$cmd" in
   up)
+    # Never replace a running or stopped registration implicitly. Existing containers
+    # must be retired deliberately before creating this pool again.
+    for i in $(seq 1 "$COUNT"); do
+      c="$CONTAINER-$i"
+      if docker container inspect "$c" >/dev/null 2>&1; then
+        echo "container $c already exists; retain it or remove the pool explicitly before up" >&2
+        exit 1
+      fi
+    done
     echo "Starting $COUNT runner(s) with label $LABEL (first run downloads the image; each runner installs build packages, 2-5 min)"
     # Build packages into a local image once (cached afterwards), instead of apt-get in every container.
     LOCAL_IMAGE="discordy-actions-runner:${IMAGE##*:}"
@@ -169,26 +178,33 @@ DOCKERFILE
     for i in $(seq 1 "$COUNT"); do
       c="$CONTAINER-$i"; n="$PREFIX-$i"
       echo "  [$i/$COUNT] starting container $c"
-      docker rm -f "$c" >/dev/null 2>&1 || true
       token="$(gh api -X POST "orgs/$ORG/actions/runners/registration-token" -q .token)"
       # The work dir has the same path on the host and in the container: jobs talk to the host's Docker, so a
       # bind mount of $GITHUB_WORKSPACE (docker run -v "$GITHUB_WORKSPACE:/repo") must resolve on the host too.
       work="/srv/discordy-runner/$c/_work"
-      docker run -d --name "$c" --user root \
+      docker run -d --restart unless-stopped --name "$c" --user root \
         -e RUNNER_ALLOW_RUNASROOT=1 -e REG_TOKEN="$token" -e ORG="$ORG" -e NAME="$n" -e LABEL="$LABEL" -e PACKAGES="$PACKAGES" -e WORK="$work" \
         -v /var/run/docker.sock:/var/run/docker.sock -v "$work:$work" -v "$CACHE_VOLUME:/cache" $NETWORK_ARGS \
-        "$LOCAL_IMAGE" bash -c 'cd /home/runner && ./config.sh --unattended --replace --url "https://github.com/$ORG" --token "$REG_TOKEN" --name "$NAME" --labels "$LABEL" --no-default-labels --work "$WORK" && unset REG_TOKEN && exec ./run.sh' >/dev/null
+        "$LOCAL_IMAGE" bash -c "$(cat "$(dirname "$0")/runner-entrypoint.sh")" >/dev/null
     done
-    online=0
+    online=0; ready=0
     echo "Waiting for the runners to register with GitHub (follow one with: docker logs -f $CONTAINER-1)"
     last=-1
     for _ in $(seq 1 150); do
       online="$(runners_json | jq -s "[.[] | select(.name|startswith(\"$PREFIX-\")) | select(.status==\"online\")] | length")"
       [[ "$online" != "$last" ]] && { echo "  online: $online/$COUNT"; last="$online"; }
-      [[ "$online" -ge "$COUNT" ]] && break
+      ready=0
+      for i in $(seq 1 "$COUNT"); do
+        c="$CONTAINER-$i"
+        if docker exec "$c" bash -c 'cd /home/runner && test -f .runner && test -f .credentials && test -f .credentials_rsaparams' >/dev/null 2>&1; then
+          ready=$((ready + 1))
+        fi
+      done
+      [[ "$online" -ge "$COUNT" && "$ready" -eq "$COUNT" ]] && break
       sleep 2
     done
     echo "runners online ($LABEL): $online/$COUNT"
+    [[ "$online" -ge "$COUNT" && "$ready" -eq "$COUNT" ]] || { echo "not all requested runners registered; CI_RUNNER was not changed" >&2; exit 1; }
     if [[ -z "$HOST" ]]; then
       [[ "$online" -gt 0 ]] || { echo "no runner came online; CI_RUNNER was not changed" >&2; exit 1; }
       set_runner_var "$LABEL"
