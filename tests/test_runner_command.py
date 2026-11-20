@@ -2,6 +2,7 @@
 import os
 import pathlib
 import subprocess
+import shutil
 import tempfile
 import unittest
 
@@ -27,7 +28,7 @@ if [[ "$1" == api && "$2" == *variables/CI_RUNNER ]]; then echo vm-runner; fi
             env = {**os.environ, 'PATH': str(path) + os.pathsep + os.environ['PATH'], 'CALLS': shell_path(path / 'calls')}
             if subset is not None: env['SELF_HOSTED_REPOS'] = subset
             else: env.pop('SELF_HOSTED_REPOS', None)
-            run = subprocess.run(['bash', shell_path(ROOT / 'scripts/runner.sh'), *args], env=env, capture_output=True, text=True)
+            run = subprocess.run([shutil.which('bash'), shell_path(ROOT / 'scripts/runner.sh'), *args], env=env, capture_output=True, text=True)
             return run, (path / 'calls').read_text() if (path / 'calls').exists() else ''
 
     def test_use_targets_all_repositories_or_explicit_subset(self):
