@@ -100,7 +100,7 @@ class DockerMetaTest(unittest.TestCase):
                     "RUN_NUMBER": "42",
                     "SHA": "abc123",
                     "SOURCE_URL": "https://github.com/voics-app/api",
-                    "OWNER": "Discordy-Voics",
+                    "OWNER": "Voics-App",
                     "REGISTRY": "ghcr.io",
                     "IMAGE_NAME": "api",
                     "DESCRIPTION": "Discordy REST API",
