@@ -73,7 +73,7 @@ on:
         default: "ubuntu-latest"
     secrets:
       private-deps-token:
-        description: "Optional token with read access to private discordy-voics repos (git dependencies such as the contracts crate)."
+        description: "Optional token with read access to private voics-app repos (git dependencies such as the contracts crate)."
         required: false
 
 permissions:
@@ -232,6 +232,7 @@ jobs:
           target_note="clean target"
           if [[ "$CI_REUSE_TARGET" == true ]]; then
             repo="${GITHUB_REPOSITORY#*/}"
+            # shellcheck disable=SC2015
             lockhash="$( { [[ -f Cargo.lock ]] && cat Cargo.lock || find . -name Cargo.toml -not -path './target/*' | sort | xargs cat; } | sha256sum | cut -c1-16)"
             # Key: lockfile + toolchain (rustc -vV) + arch + workdir + extra env (RUSTFLAGS etc.).
             key="$( { rustc -vV; echo "$TOOLCHAIN"; uname -m; echo "$WORKDIR"; echo "$EXTRA_ENV"; echo "$lockhash"; } | sha256sum | cut -c1-16)"
@@ -241,6 +242,7 @@ jobs:
             # 2 most recently used per repo. A dir still locked by a running job is never touched.
             { find "$base" -mindepth 1 -maxdepth 1 -type d -mtime +7; { ls -1dt "$base"/*/ 2>/dev/null || true; } | sed "s:/$::" | tail -n +3; } | sort -u | while IFS= read -r old; do
               [[ "$old" == "$dir" ]] && continue
+              # shellcheck disable=SC2094
               ( flock -n 8 || exit 0; rm -rf "$old" "$old.lock" ) 8>"$old.lock" || true
             done
             # Disk guard (the 73 GB VM filled up on 2026-11-02): under 15 GB free, drop every other idle target
@@ -251,6 +253,7 @@ jobs:
               # shellcheck disable=SC2094  # lock the dir's .lock file, then delete it (same pattern as above)
               for old in /cache/target/*/*/; do
                 old="${old%/}"; [[ "$old" == "$dir" ]] && continue
+                # shellcheck disable=SC2094
                 ( flock -n 8 || exit 0; rm -rf "$old" "$old.lock" ) 8>"$old.lock" || true
               done
             fi

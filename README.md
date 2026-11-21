@@ -1,13 +1,13 @@
-# discordy-voics/.github
+# voics-app/.github
 
-Org-level repository for the `discordy-voics` GitHub organization. It holds:
+Org-level repository for the `voics-app` GitHub organization. It holds:
 
 - **Reusable workflows** (`.github/workflows/*.yml`, all `on: workflow_call`) that every Discordy repo calls from its `ci.yml`.
 - **Org defaults**: the org profile (`profile/README.md`), issue forms and the PR template (`.github/`), `CODEOWNERS`, a dependabot template (`templates/dependabot.yml`) and a `CONTRIBUTING.md` pointer.
 
 ## Reusable workflows
 
-Reference them as `discordy-voics/.github/.github/workflows/<name>.yml@main`.
+Reference them as `voics-app/.github/.github/workflows/<name>.yml@main`.
 
 Every workflow takes a `runs-on` input. It defaults to `ubuntu-latest`. You can pass a single label, or a JSON array such as `'["self-hosted","discordy"]'` for the in-cluster ARC runners.
 
@@ -20,7 +20,7 @@ Every workflow takes a `runs-on` input. It defaults to `ubuntu-latest`. You can 
 | `release-please.yml` | Runs release-please in manifest mode: release PR, `vX.Y.Z` tag, CHANGELOG, GitHub Release | `target-branch`, `config-file`, `manifest-file`; outputs `release-created`, `tag-name`, `version` |
 | `gitflow-guard.yml` | Fails PRs that break git-flow (see below) | `main-sources`, `develop-sources` (space separated globs) |
 | `ghcr-retention.yml` | Keeps all stable versions and the newest N prereleases per package; deletes older prereleases and their cosign tags | `packages`*, `keep-prereleases` (5), `dry-run`, `owner` |
-| `secrets-inventory-check.yml` | Fails when a `secretKeyRef.key` or ExternalSecret key (`secretKey` / `remoteRef.property`) is missing from the secrets inventory | `inventory-path` (`secrets/inventory.yaml`), `inventory-repository` (`discordy-voics/docs`), `inventory-ref`, `manifests-path` |
+| `secrets-inventory-check.yml` | Fails when a `secretKeyRef.key` or ExternalSecret key (`secretKey` / `remoteRef.property`) is missing from the secrets inventory | `inventory-path` (`secrets/inventory.yaml`), `inventory-repository` (`voics-app/docs`), `inventory-ref`, `manifests-path` |
 
 `*` = required. Every input carries a description in the workflow file.
 
@@ -30,11 +30,11 @@ Every workflow takes a `runs-on` input. It defaults to `ubuntu-latest`. You can 
 - `services`: a JSON object with the same shape as `jobs.<id>.services`.
 - `env`: a JSON object of extra environment variables.
 - `system-packages`: apt packages to install before the run.
-- `private-deps-token` (secret): a token that can read the private org repos and packages, such as the contracts crate (git dependency) or `@discordy-voics/*` on GitHub Packages. `node.yml` falls back to the job token for packages.
+- `private-deps-token` (secret): a token that can read the private org repos and packages, such as the contracts crate (git dependency) or `@voics-app/*` on GitHub Packages. `node.yml` falls back to the job token for packages.
 
 ### Image tags (`docker.yml`)
 
-Images are published as `ghcr.io/discordy-voics/<image-name>`.
+Images are published as `ghcr.io/voics-app/<image-name>`.
 
 | Ref | Tags | Pushed |
 |---|---|---|
@@ -92,10 +92,10 @@ permissions:
 jobs:
   gitflow:
     if: github.event_name == 'pull_request'
-    uses: discordy-voics/.github/.github/workflows/gitflow-guard.yml@main
+    uses: voics-app/.github/.github/workflows/gitflow-guard.yml@main
 
   rust:
-    uses: discordy-voics/.github/.github/workflows/rust.yml@main
+    uses: voics-app/.github/.github/workflows/rust.yml@main
     with:
       image-name: api
       description: Discordy REST API
@@ -113,7 +113,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    uses: discordy-voics/.github/.github/workflows/docker.yml@main
+    uses: voics-app/.github/.github/workflows/docker.yml@main
     with:
       image-name: api
       description: Discordy REST API
@@ -127,7 +127,7 @@ jobs:
 ```yaml
 jobs:
   elixir:
-    uses: discordy-voics/.github/.github/workflows/elixir.yml@main
+    uses: voics-app/.github/.github/workflows/elixir.yml@main
     with:
       image-name: gateway
       description: Discordy real-time gateway
@@ -136,7 +136,7 @@ jobs:
   docker:
     needs: elixir
     permissions: {contents: read, packages: write, id-token: write}
-    uses: discordy-voics/.github/.github/workflows/docker.yml@main
+    uses: voics-app/.github/.github/workflows/docker.yml@main
     with:
       image-name: gateway
       description: Discordy real-time gateway
@@ -147,10 +147,10 @@ jobs:
 ```yaml
 jobs:
   signaling:
-    uses: discordy-voics/.github/.github/workflows/elixir.yml@main
+    uses: voics-app/.github/.github/workflows/elixir.yml@main
     with: {working-directory: signaling, image-name: voice-signaling, description: Discordy voice signaling}
   sfu:
-    uses: discordy-voics/.github/.github/workflows/rust.yml@main
+    uses: voics-app/.github/.github/workflows/rust.yml@main
     with: {working-directory: sfu, image-name: voice-sfu, description: Discordy SFU}
   docker:
     needs: [signaling, sfu]
@@ -158,7 +158,7 @@ jobs:
       matrix:
         component: [signaling, sfu]
     permissions: {contents: read, packages: write, id-token: write}
-    uses: discordy-voics/.github/.github/workflows/docker.yml@main
+    uses: voics-app/.github/.github/workflows/docker.yml@main
     with:
       image-name: voice-${{ matrix.component }}
       description: Discordy voice ${{ matrix.component }}
@@ -171,7 +171,7 @@ jobs:
 ```yaml
 jobs:
   node:
-    uses: discordy-voics/.github/.github/workflows/node.yml@main
+    uses: voics-app/.github/.github/workflows/node.yml@main
     with:
       image-name: client
       description: Discordy desktop client
@@ -190,12 +190,12 @@ permissions:
 jobs:
   release-please:
     permissions: {contents: write, pull-requests: write, issues: write}
-    uses: discordy-voics/.github/.github/workflows/release-please.yml@main
+    uses: voics-app/.github/.github/workflows/release-please.yml@main
   docker:
     needs: release-please
     if: needs.release-please.outputs.release-created == 'true'
     permissions: {contents: read, packages: write, id-token: write}
-    uses: discordy-voics/.github/.github/workflows/docker.yml@main
+    uses: voics-app/.github/.github/workflows/docker.yml@main
     with:
       image-name: api
       description: Discordy REST API
@@ -211,7 +211,7 @@ on:
 jobs:
   retention:
     permissions: {packages: write}
-    uses: discordy-voics/.github/.github/workflows/ghcr-retention.yml@main
+    uses: voics-app/.github/.github/workflows/ghcr-retention.yml@main
     with:
       packages: api messages gateway voice-signaling voice-sfu admin admin-bff
       keep-prereleases: 5
@@ -224,7 +224,7 @@ jobs:
 ```yaml
 jobs:
   secrets-inventory:
-    uses: discordy-voics/.github/.github/workflows/secrets-inventory-check.yml@main
+    uses: voics-app/.github/.github/workflows/secrets-inventory-check.yml@main
     with:
       manifests-path: .
       inventory-path: secrets/inventory.yaml
@@ -264,9 +264,9 @@ unner-win.ps1 up` downloads and registers a native runner (label `karma-win`, no
 
 ## CI cache
 
-> Full takeover guide (preinstalled tools, every cache and its key, on/off switches with risks, the "when you change X" checklist, quirks): [docs handbook 12, CI runners and caching](https://github.com/discordy-voics/docs/blob/develop/handbook/12-ci-runners-and-caching.md).
+> Full takeover guide (preinstalled tools, every cache and its key, on/off switches with risks, the "when you change X" checklist, quirks): [docs handbook 12, CI runners and caching](https://github.com/voics-app/docs/blob/develop/handbook/12-ci-runners-and-caching.md).
 
-On self-hosted runners the shared workflows use a persistent cache volume and the toolchains baked into the runner image instead of the GitHub Actions cache (gitops#59, [ADR 0022](https://github.com/discordy-voics/docs/blob/develop/adr/0022-ci-cache-safety-rules.md)). GitHub-hosted runners are unchanged: parallel `fmt`, `clippy`, `test` jobs and the Actions cache.
+On self-hosted runners the shared workflows use a persistent cache volume and the toolchains baked into the runner image instead of the GitHub Actions cache (gitops#59, [ADR 0022](https://github.com/voics-app/docs/blob/develop/adr/0022-ci-cache-safety-rules.md)). GitHub-hosted runners are unchanged: parallel `fmt`, `clippy`, `test` jobs and the Actions cache.
 
 | What | Where | Used |
 |---|---|---|
@@ -283,7 +283,7 @@ On self-hosted runners the shared workflows use a persistent cache volume and th
 
 **Switch it off (clean from-scratch build, like GitHub-hosted):**
 
-- everywhere: set the repository or organization variable `CI_CACHE` to `off` (`gh variable set CI_CACHE --body off -R discordy-voics/<repo>`; delete it or set `on` to switch back on);
+- everywhere: set the repository or organization variable `CI_CACHE` to `off` (`gh variable set CI_CACHE --body off -R voics-app/<repo>`; delete it or set `on` to switch back on);
 - one pull request: add the label `ci-no-cache`, then push a commit (a re-run keeps the old label list);
 - automatically: every `schedule` run (weekly, `develop`) is cold, so a cache that hides a breakage is found within a week.
 
@@ -293,7 +293,7 @@ On self-hosted runners the shared workflows use a persistent cache volume and th
 
 **Clear it:** `scripts/runner.sh cache-clear [--host user@vm] [--label L] [--what all|cargo|target|sccache|pnpm|trivy|mix] [--layers] [--force]`. It refuses while a runner of that label is busy (unless `--force`); `--layers` also prunes the host's Docker build cache. `runner.sh status` prints the volume size. The workflows themselves prune target dirs idle for 7 days and keep the 2 newest per repo. **Disk guard:** under 15 GB free on `/cache` a Rust job first drops every other idle target dir (all repos), and under 8 GB it builds with a clean target. Clean builds (releases, cold runs, low disk) compile into `$RUNNER_TEMP/target`, which the runner wipes after the job, so nothing large stays in the workspace. sccache is capped at 4 GB.
 
-**Rebuild the runners (new toolchain versions):** `scripts/runner.sh up --host user@vm --count 2` rebuilds the image and recreates the containers (do it when the runners are idle: `gh api orgs/discordy-voics/actions/runners -q '.runners[]|[.name,.busy]|@tsv'`), then `SELF_HOSTED_REPOS="..." scripts/runner.sh use <label>`. Versions are set at the top of `runner.sh` (`RUST_TOOLCHAINS`, `NODE_MAJORS`, `SCCACHE_VERSION`, `COSIGN_VERSION`); a workflow that asks for a toolchain that is not in the image just installs it.
+**Rebuild the runners (new toolchain versions):** `scripts/runner.sh up --host user@vm --count 2` rebuilds the image and recreates the containers (do it when the runners are idle: `gh api orgs/voics-app/actions/runners -q '.runners[]|[.name,.busy]|@tsv'`), then `SELF_HOSTED_REPOS="..." scripts/runner.sh use <label>`. Versions are set at the top of `runner.sh` (`RUST_TOOLCHAINS`, `NODE_MAJORS`, `SCCACHE_VERSION`, `COSIGN_VERSION`); a workflow that asks for a toolchain that is not in the image just installs it.
 
 ## Local development
 
@@ -316,7 +316,7 @@ This repository reads no environment variables. Workflows are configured only th
 | `build-secrets` | docker | BuildKit secrets, `id=value` per line |
 | `token` | release-please | PAT or App token, so release tags trigger workflows |
 | `token` | ghcr-retention | `read:packages` + `delete:packages` |
-| `inventory-token` | secrets-inventory-check | Read access to `discordy-voics/docs` |
+| `inventory-token` | secrets-inventory-check | Read access to `voics-app/docs` |
 
 All third-party actions are pinned to full commit SHAs. `.github/dependabot.yml` keeps those pins current.
 
@@ -324,8 +324,8 @@ All third-party actions are pinned to full commit SHAs. `.github/dependabot.yml`
 
 These steps need the GitHub org, so they could not be done from here:
 
-1. Create the `discordy-voics` org and the private repo `.github`, then push `main` and `develop`. The repo name must be exactly `.github`, both so the org profile shows and so the reusable-workflow refs resolve.
-2. Let other repos use these workflows. Because this repo is private, open **Settings → Actions → General → Access** and choose "Accessible from repositories in the `discordy-voics` organization".
+1. Create the `voics-app` org and the private repo `.github`, then push `main` and `develop`. The repo name must be exactly `.github`, both so the org profile shows and so the reusable-workflow refs resolve.
+2. Let other repos use these workflows. Because this repo is private, open **Settings → Actions → General → Access** and choose "Accessible from repositories in the `voics-app` organization".
 3. Create the org secrets that callers pass in:
    - `DEPS_TOKEN`: fine-grained, read access to repo contents and packages.
    - `DOCS_READ_TOKEN`: read access to `docs`.

@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation and runbooks
-    url: https://github.com/discordy-voics/docs
+    url: https://github.com/voics-app/docs
     about: Architecture, ADRs, runbooks and the contributing guide.

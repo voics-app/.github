@@ -82,7 +82,7 @@ on:
         default: "ubuntu-latest"
     secrets:
       private-deps-token:
-        description: "Optional token with read access to private discordy-voics repos (git dependencies)."
+        description: "Optional token with read access to private voics-app repos (git dependencies)."
         required: false
 
 permissions:
@@ -265,6 +265,7 @@ jobs:
           set -euo pipefail
           if [[ ! -d "$MIX_SNAPSHOT" ]]; then
             tmp="$MIX_SNAPSHOT.tmp.$$"; mkdir -p "$tmp"
+            # shellcheck disable=SC2015
             cp -a deps _build "$tmp"/ && mv -T "$tmp" "$MIX_SNAPSHOT" || rm -rf "$tmp"
           fi
       - name: Summary

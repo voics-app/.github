@@ -9,13 +9,13 @@ workflows are covered by `tests/test_workflows.py`.
 
 ```mermaid
 C4Component
-    title discordy-voics/.github - reusable CI components
+    title voics-app/.github - reusable CI components
 
     Container_Boundary(caller, "Service repo ci.yml (api, gateway, messages, voice, client, admin, ...)") {
         Component(ci, "ci.yml", "workflow", "Calls the reusable workflows with image-name and description")
     }
 
-    Container_Boundary(org, "discordy-voics/.github") {
+    Container_Boundary(org, "voics-app/.github") {
         Component(lang, "rust.yml / elixir.yml / node.yml", "workflow_call", "Lint, test, dependency audit")
         Component(docker, "docker.yml", "workflow_call", "buildx, Trivy, GHCR push, syft SBOM, cosign")
         Component(guard, "gitflow-guard.yml", "workflow_call", "Enforces git-flow PR sources")
@@ -24,9 +24,9 @@ C4Component
         Component(inv, "secrets-inventory-check.yml", "workflow_call", "Manifest secret keys vs inventory")
     }
 
-    System_Ext(ghcr, "GHCR", "ghcr.io/discordy-voics/*")
+    System_Ext(ghcr, "GHCR", "ghcr.io/voics-app/*")
     System_Ext(sigstore, "Sigstore", "Fulcio / Rekor keyless signing")
-    System_Ext(docs, "discordy-voics/docs", "secrets/inventory.yaml")
+    System_Ext(docs, "voics-app/docs", "secrets/inventory.yaml")
 
     Rel(ci, guard, "pull_request")
     Rel(ci, lang, "push / pull_request")

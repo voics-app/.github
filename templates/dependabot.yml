@@ -1,4 +1,4 @@
-# Dependabot template for discordy-voics repositories.
+# Dependabot template for voics-app repositories.
 # Copy to <repo>/.github/dependabot.yml and delete the ecosystems the repo does
 # not use. PRs target `develop` (dependabot/* is allowed by gitflow-guard) and
 # use Conventional Commit prefixes so release-please picks them up.
