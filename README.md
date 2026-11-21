@@ -247,6 +247,10 @@ scripts/repo-visibility.sh private [--dry-run] [repo ...]
 - `private` sets `CI_RUNNER=vm-runner` (private GitHub-hosted minutes are limited and billed) and, for `.github`, shares its reusable workflows with the organization.
 - Before `public`: scan the full history for secrets first. After `private`: gitops `publish-public` can no longer download the website/client artifacts with its workflow token, so publishing needs the `minio-publish` jobs back.
 
+### Automatic fallback to the VM pool
+
+CI routing stays configurable without anyone watching. The gitops workflow `ci-runner-fallback` (hourly, on the in-cluster `discordy` runner, script `gitops/scripts/ci-runner-fallback.sh`) reads the organization's Actions billing usage for the current month. When the included GitHub-hosted minutes are used up, it sets `CI_RUNNER=vm-runner` (plus a marker variable `CI_RUNNER_AUTO=1`) on every **private** repository, so jobs move to the self-hosted VM pool by themselves; next month, when minutes are available again, it removes both. Public repositories are never touched. A `CI_RUNNER` you set by hand (gitops keeps `vm-runner`) has no marker and is never removed. Try it with `GH_TOKEN=<pat> scripts/ci-runner-fallback.sh --dry-run`. It needs the gitops `production` environment secret `CI_BILLING_TOKEN` (a PAT with `admin:org` and `repo`; the owner-side value is the PAT already stored as `ARC_GITHUB_TOKEN` if it has those scopes). Without the secret or scope the job skips and changes nothing.
+
 ## CI runners
 
 All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When the GitHub Free minutes run low, you can switch every repository to self-hosted runners on the owner's PC or on a VM, and back, with a single command. Jobs that name a runner explicitly keep it: `discordy` (the in-cluster ARC runners, used for secrets-sync and minio-publish) and `windows-latest` (the installer build).
