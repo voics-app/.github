@@ -8,7 +8,7 @@
 #
 # What it removes (everything it removes is rebuilt or re-downloaded on demand; see docs handbook 12):
 #   - Docker build cache beyond BUILD_CACHE_MAX (default 15GB) and records unused for 14 days
-#   - our own built images (ghcr.io/discordy-voics/*) older than 24 h that no container uses, and dangling images
+#   - our own built images (ghcr.io/voics-app/*) older than 24 h that no container uses, and dangling images
 #   - stopped containers older than 24 h (testcontainers leftovers) and unused anonymous volumes
 #   - a pnpm store (per runner work dir) larger than PNPM_STORE_MAX_GB (default 3); it refills on the next install
 #   - the old /cache/pnpm-store (unused since the store moved to the work dir)
@@ -46,7 +46,7 @@ run docker builder prune -f --max-used-space "$BUILD_CACHE_MAX"
 
 echo "== our images older than 24 h (in-use ones are skipped), dangling images"
 cutoff=$(( $(date +%s) - 86400 ))
-docker images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedAt}}' | awk '$1 ~ /^ghcr\.io\/discordy-voics\//' |
+docker images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedAt}}' | awk '$1 ~ /^ghcr\.io\/voics-app\//' |
   while read -r ref id created_date created_time _; do
     ts=$(date -d "$created_date $created_time" +%s 2>/dev/null || echo "$(date +%s)")
     if (( ts < cutoff )); then

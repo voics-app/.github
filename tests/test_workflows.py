@@ -99,7 +99,7 @@ class DockerMetaTest(unittest.TestCase):
                     "EVENT_NAME": event,
                     "RUN_NUMBER": "42",
                     "SHA": "abc123",
-                    "SOURCE_URL": "https://github.com/discordy-voics/api",
+                    "SOURCE_URL": "https://github.com/voics-app/api",
                     "OWNER": "Discordy-Voics",
                     "REGISTRY": "ghcr.io",
                     "IMAGE_NAME": "api",
@@ -115,7 +115,7 @@ class DockerMetaTest(unittest.TestCase):
     def assert_tags(self, run, version, tags, publish):
         self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
         self.assertEqual(run.outputs["version"], version)
-        self.assertEqual(run.outputs["tags"].splitlines(), [f"ghcr.io/discordy-voics/api:{t}" for t in tags])
+        self.assertEqual(run.outputs["tags"].splitlines(), [f"ghcr.io/voics-app/api:{t}" for t in tags])
         self.assertEqual(run.outputs["publish"], publish)
 
     def test_develop_publishes_dev_prerelease(self):
@@ -154,7 +154,7 @@ class DockerMetaTest(unittest.TestCase):
         labels = dict(line.split("=", 1) for line in self.meta("refs/tags/v1.2.3").outputs["labels"].splitlines())
         self.assertEqual(labels["org.opencontainers.image.title"], "api")
         self.assertEqual(labels["org.opencontainers.image.description"], "Discordy REST API")
-        self.assertEqual(labels["org.opencontainers.image.source"], "https://github.com/discordy-voics/api")
+        self.assertEqual(labels["org.opencontainers.image.source"], "https://github.com/voics-app/api")
         self.assertEqual(labels["org.opencontainers.image.version"], "1.2.3")
         self.assertEqual(labels["org.opencontainers.image.revision"], "abc123")
         self.assertEqual(labels["org.opencontainers.image.licenses"], "UNLICENSED")
@@ -336,7 +336,7 @@ class GhcrRetentionTest(unittest.TestCase):
                 self.STEP,
                 {
                     "GH_TOKEN": "x",
-                    "OWNER": "discordy-voics",
+                    "OWNER": "voics-app",
                     "PACKAGES": "api",
                     "KEEP": keep,
                     "DRY_RUN": dry_run,

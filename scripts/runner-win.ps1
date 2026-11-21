@@ -11,7 +11,7 @@
 # (run `up` again). Releases wait in the queue while it is down and WINDOWS_RUNNER is set.
 param([ValidateSet('up', 'down', 'status')][string]$Command = 'status')
 $ErrorActionPreference = 'Stop'
-$Org = 'discordy-voics'
+$Org = 'voics-app'
 $Label = 'karma-win'
 $Name = "karma-win-$env:COMPUTERNAME".ToLower()
 $Version = '2.338.0'   # same runner version as the Linux runners

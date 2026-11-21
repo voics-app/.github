@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-hosted GitHub Actions runners for discordy-voics, on the owner's PC or on any Linux VM with Docker.
+# Self-hosted GitHub Actions runners for voics-app, on the owner's PC or on any Linux VM with Docker.
 # GitHub-hosted ubuntu-latest stays the default; self-hosted runners are opt-in per repo variable CI_RUNNER,
 # which the shared workflows' default runs-on follows (see README "CI runners").
 #
@@ -27,7 +27,7 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1
 for d in /c/Users/*/AppData/Local/Microsoft/WinGet/Packages/jqlang.jq_*; do [[ -d "$d" ]] && PATH="$PATH:$d"; done
 command -v jq >/dev/null || { echo "jq is required"; exit 1; }
-ORG=discordy-voics
+ORG=voics-app
 IMAGE=ghcr.io/actions/actions-runner:2.338.2   # bump on new runner releases: a self-updated runner can have a broken externals/node24 npm (gitops#63)
 # The runner image is minimal; ubuntu-latest ships these (pnpm needs libatomic1, Rust/native builds the rest).
 PACKAGES="gettext-base libatomic1 build-essential pkg-config libssl-dev cmake clang unzip zstd jq python3 python3-yaml git curl ca-certificates xz-utils"
