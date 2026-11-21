@@ -2,7 +2,7 @@
 # and pnpm audit. On self-hosted runners Node, corepack/pnpm and the pnpm store come from the runner image and
 # the /cache volume (CI_CACHE=off or the PR label `ci-no-cache` turns that off; see ADR-0022). Set a script input to "" to skip that step.
 # GitHub Packages (npm.pkg.github.com) is configured for the `npm-scope`
-# scope, so private @discordy-voics packages such as the contracts package
+# scope, so private @voics-app packages such as the contracts package
 # resolve with the job token or `private-deps-token`.
 name: node
 
@@ -28,7 +28,7 @@ on:
         description: "npm scope served from GitHub Packages."
         required: false
         type: string
-        default: "@discordy-voics"
+        default: "@voics-app"
       lint-script:
         description: "package.json script for linting (empty to skip)."
         required: false
@@ -86,7 +86,7 @@ on:
         default: "ubuntu-latest"
     secrets:
       private-deps-token:
-        description: "Optional token with read access to private discordy-voics repos and packages. Defaults to the job token."
+        description: "Optional token with read access to private voics-app repos and packages. Defaults to the job token."
         required: false
 
 permissions:

@@ -5,7 +5,7 @@
 #
 # Call it from a weekly schedule in each repo:
 #   on: { schedule: [{ cron: "17 3 * * 0" }], workflow_dispatch: {} }
-#   jobs: { cleanup: { permissions: { actions: write, contents: read }, uses: discordy-voics/.github/.github/workflows/cache-cleanup.yml@main } }
+#   jobs: { cleanup: { permissions: { actions: write, contents: read }, uses: voics-app/.github/.github/workflows/cache-cleanup.yml@main } }
 name: cache-cleanup
 
 on:

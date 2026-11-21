@@ -82,7 +82,7 @@ on:
         default: "ubuntu-latest"
     secrets:
       private-deps-token:
-        description: "Optional token with read access to private discordy-voics repos (git dependencies)."
+        description: "Optional token with read access to private voics-app repos (git dependencies)."
         required: false
 
 permissions:

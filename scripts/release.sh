@@ -10,33 +10,33 @@ cd "$base/$r" && git fetch -q origin --tags || { echo "$r: fetch failed"; exit 1
 git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "$r: tag v$v already exists"; exit 1; }
 git push -q origin "origin/develop:refs/heads/release/$v" || { echo "$r: push release/$v failed"; exit 1; }
 # Resumable: reuse an open release PR (e.g. after a stopped run) instead of failing on "already exists".
-n=$(gh pr list -R "discordy-voics/$r" -H "release/$v" -B main --state open --json number -q '.[0].number')
-[ -n "$n" ] || n=$(gh pr create -R "discordy-voics/$r" -B main -H "release/$v" -t "release: $r $v" -b "Release $v (develop -> main).
+n=$(gh pr list -R "voics-app/$r" -H "release/$v" -B main --state open --json number -q '.[0].number')
+[ -n "$n" ] || n=$(gh pr create -R "voics-app/$r" -B main -H "release/$v" -t "release: $r $v" -b "Release $v (develop -> main).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" | grep -o '[0-9]*$') || { echo "$r: PR create failed"; exit 1; }
 echo "$r: release PR #$n"
 for i in $(seq 1 120); do
-  o=$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '"\(.statusCheckRollup|length) \([.statusCheckRollup[]|select(.status!="COMPLETED")]|length) \([.statusCheckRollup[]|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT")|.name]|join(";"))"')
+  o=$(gh pr view "$n" -R "voics-app/$r" --json statusCheckRollup -q '"\(.statusCheckRollup|length) \([.statusCheckRollup[]|select(.status!="COMPLETED")]|length) \([.statusCheckRollup[]|select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT")|.name]|join(";"))"')
   set -- $o
   [ -n "${3:-}" ] && { echo "$r: PR #$n FAILING: $3"; exit 1; }
   # A cancelled run (superseded or cancelled by hand) is not a verdict: wait until that check has a green re-run.
-  [ "$1" -gt 0 ] && [ "$2" = 0 ] && [ -z "$(gh pr view "$n" -R "discordy-voics/$r" --json statusCheckRollup -q '[.statusCheckRollup[]] as $c | [$c[]|select(.conclusion=="CANCELLED")|.name|select(. as $n|[$c[]|select(.name==$n and (.conclusion=="SUCCESS" or .conclusion=="SKIPPED"))]|length==0)]|.[0] // empty')" ] && { pr_green=1; break; }
+  [ "$1" -gt 0 ] && [ "$2" = 0 ] && [ -z "$(gh pr view "$n" -R "voics-app/$r" --json statusCheckRollup -q '[.statusCheckRollup[]] as $c | [$c[]|select(.conclusion=="CANCELLED")|.name|select(. as $n|[$c[]|select(.name==$n and (.conclusion=="SUCCESS" or .conclusion=="SKIPPED"))]|length==0)]|.[0] // empty')" ] && { pr_green=1; break; }
   sleep 60
 done
 [ "${pr_green:-0}" = 1 ] || { echo "$r: PR #$n not green within the wait, not merging"; exit 1; }
-gh pr merge "$n" -R "discordy-voics/$r" --merge >/dev/null || { echo "$r: merge failed"; exit 1; }
+gh pr merge "$n" -R "voics-app/$r" --merge >/dev/null || { echo "$r: merge failed"; exit 1; }
 git fetch -q origin
 # Tag only after main's CI passed on this exact commit: never tag a red main, and the tag build then skips
 # re-running the checks (shared workflows' "verified" job) and only builds/publishes the version image.
 # The merge commit from GitHub, not origin/main: a fetch right after the merge can still see the old main,
 # and waiting on that SHA never finds a main run (website 0.3.1 stalled on this).
-sha=$(gh pr view "$n" -R "discordy-voics/$r" --json mergeCommit -q .mergeCommit.oid)
+sha=$(gh pr view "$n" -R "voics-app/$r" --json mergeCommit -q .mergeCommit.oid)
 for _ in $(seq 1 10); do git fetch -q origin; [ "$(git rev-parse origin/main)" = "$sha" ] && break; sleep 6; done
 # Every push workflow on the merge commit must pass, whatever it is called (api/client "ci", docs "docs", ...).
 ALL_GREEN='[.workflow_runs[]] as $w | if ($w|length)==0 then "" elif any($w[]; .status!="completed") then "running"
   elif all($w[]; .conclusion=="success" or .conclusion=="skipped") then "completed success" else "completed failure" end'
 for i in $(seq 1 120); do
-  s=$(gh api "repos/discordy-voics/$r/actions/runs?head_sha=$sha&branch=main&event=push" -q "$ALL_GREEN" 2>/dev/null)
+  s=$(gh api "repos/voics-app/$r/actions/runs?head_sha=$sha&branch=main&event=push" -q "$ALL_GREEN" 2>/dev/null)
   case "$s" in "completed success") echo "$r: main CI green on ${sha:0:7}"; break;; completed*) echo "$r: main CI $s on ${sha:0:7}, not tagging"; exit 1;; esac
   sleep 60
 done

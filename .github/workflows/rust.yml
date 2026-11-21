@@ -73,7 +73,7 @@ on:
         default: "ubuntu-latest"
     secrets:
       private-deps-token:
-        description: "Optional token with read access to private discordy-voics repos (git dependencies such as the contracts crate)."
+        description: "Optional token with read access to private voics-app repos (git dependencies such as the contracts crate)."
         required: false
 
 permissions:
