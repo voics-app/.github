@@ -224,6 +224,7 @@ jobs:
           WORKDIR: ${{ inputs.working-directory }}
           EXTRA_ENV: ${{ inputs.env }}
         run: |
+          # shellcheck disable=SC2015,SC2094
           set -euo pipefail
           if [[ "$CI_CACHE_ON" == true ]]; then
             export CARGO_HOME=/cache/cargo   # registry + git downloads: safe to reuse everywhere (cargo locks it)
