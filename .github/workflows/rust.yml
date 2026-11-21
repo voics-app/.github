@@ -73,7 +73,7 @@ on:
         default: "ubuntu-latest"
     secrets:
       private-deps-token:
-        description: "Optional token with read access to private discordy-voics repos (git dependencies such as the contracts crate)."
+        description: "Optional token with read access to private voics-app repos (git dependencies such as the contracts crate)."
         required: false
 
 permissions:
@@ -224,6 +224,7 @@ jobs:
           WORKDIR: ${{ inputs.working-directory }}
           EXTRA_ENV: ${{ inputs.env }}
         run: |
+          # shellcheck disable=SC2015,SC2094
           set -euo pipefail
           if [[ "$CI_CACHE_ON" == true ]]; then
             export CARGO_HOME=/cache/cargo   # registry + git downloads: safe to reuse everywhere (cargo locks it)

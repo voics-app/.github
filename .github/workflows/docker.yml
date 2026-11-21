@@ -3,7 +3,7 @@
 # build (buildx) -> Trivy scan (fails on CRITICAL) -> push to GHCR -> syft SBOM
 # -> cosign keyless signature + SBOM attestation (SBOM and signing only on main, tags and explicit release versions).
 #
-# Image: <registry>/<owner>/<image-name>, e.g. ghcr.io/discordy-voics/api.
+# Image: <registry>/<owner>/<image-name>, e.g. ghcr.io/voics-app/api.
 #
 # Tags are derived from the git ref:
 #   develop               -> X.Y.Z-dev.<run_number>

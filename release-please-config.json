@@ -3,7 +3,7 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "package-name": "discordy-voics-github",
+      "package-name": "voics-app-github",
       "changelog-path": "CHANGELOG.md"
     }
   }

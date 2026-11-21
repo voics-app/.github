@@ -1,7 +1,7 @@
 # Contributing
 
-The contributing guide for every `discordy-voics` repository lives in the docs
-repository: [discordy-voics/docs/CONTRIBUTING.md](https://github.com/discordy-voics/docs/blob/main/CONTRIBUTING.md).
+The contributing guide for every `voics-app` repository lives in the docs
+repository: [voics-app/docs/CONTRIBUTING.md](https://github.com/voics-app/docs/blob/main/CONTRIBUTING.md).
 
 It covers the Clean Code rules, Clean Architecture layering, git-flow and the
 Conventional Commits format. In short:
