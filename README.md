@@ -232,6 +232,21 @@ jobs:
       inventory-token: ${{ secrets.DOCS_READ_TOKEN }}
 ```
 
+## Repository visibility
+
+Every repository except `gitops` is public since 2026-11-21, so its CI runs free on GitHub-hosted runners. `gitops` stays private (home IP, infrastructure map) and keeps `CI_RUNNER=vm-runner`.
+
+```bash
+scripts/repo-visibility.sh status                    # visibility and CI_RUNNER of every repo
+scripts/repo-visibility.sh public  [--dry-run] [repo ...]
+scripts/repo-visibility.sh private [--dry-run] [repo ...]
+```
+
+- Without repo names it acts on every repository except `gitops`, and asks you to type the action to confirm (`--yes` skips that).
+- `public` deletes `CI_RUNNER` (GitHub-hosted runners) and requires approval for workflows of all outside contributors. The runner group `Default` keeps *Allow public repositories* off, so our VM and in-cluster runners never run a public repository's job.
+- `private` sets `CI_RUNNER=vm-runner` (private GitHub-hosted minutes are limited and billed) and, for `.github`, shares its reusable workflows with the organization.
+- Before `public`: scan the full history for secrets first. After `private`: gitops `publish-public` can no longer download the website/client artifacts with its workflow token, so publishing needs the `minio-publish` jobs back.
+
 ## CI runners
 
 All shared workflows run on **GitHub-hosted `ubuntu-latest`** by default. When the GitHub Free minutes run low, you can switch every repository to self-hosted runners on the owner's PC or on a VM, and back, with a single command. Jobs that name a runner explicitly keep it: `discordy` (the in-cluster ARC runners, used for secrets-sync and minio-publish) and `windows-latest` (the installer build).
